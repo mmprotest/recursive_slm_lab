@@ -29,16 +29,17 @@ scripts/run_demo.ps1
 ```
 
 Artifacts are written under `./artifacts/`.
+Each eval run is also stored in the SQLite DB so plots can show progress across iterations.
 
 ## CLI overview
 
 ```bash
 rslm init-db --db artifacts/memory.sqlite
 rslm seed-tasks
-rslm run-iteration --db artifacts/memory.sqlite --tasks bundled --k 8 --mode trainpool --backend mock
-rslm consolidate --db artifacts/memory.sqlite --min-evidence 3 --backend mock
-rslm eval --db artifacts/memory.sqlite --backend mock --conditions all --k 1 --heldout-size 40 --output artifacts/results.json
-rslm plot --input artifacts/results.json --output artifacts/results.png
+rslm run-iteration --db artifacts/memory.sqlite --tasks bundled --k 8 --mode trainpool --backend mock --memory-enabled
+rslm consolidate --db artifacts/memory.sqlite --min-evidence 1 --backend mock
+rslm eval --db artifacts/memory.sqlite --backend mock --conditions all --k 1 --heldout-size 40 --output artifacts/results_iter001.json
+rslm plot --input artifacts/memory.sqlite --output artifacts/results.png
 ```
 
 ## OpenAI-compatible backend

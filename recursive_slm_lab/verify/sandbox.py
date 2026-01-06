@@ -32,11 +32,13 @@ def run_in_sandbox(solution_code: str, test_code: str, timeout_s: int = 8) -> Sa
             "PYTHONHASHSEED": "0",
             "PYTHONUNBUFFERED": "1",
             "NO_NETWORK": "1",
+            "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
+            "PYTHONPATH": str(temp_path),
         }
 
         try:
             proc = subprocess.run(
-                ["python", "-m", "pytest", "-q"],
+                ["python", "-m", "pytest", "-q", "-p", "no:cov", "-p", "no:ddtrace"],
                 cwd=temp_path,
                 env=env,
                 capture_output=True,

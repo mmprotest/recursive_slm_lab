@@ -31,12 +31,19 @@ class LocalHFBackend(LLMBackend):
         self._model = model
 
     def generate(self, prompt: str, max_tokens: int, temperature: float) -> LLMResponse:
+        device = "cuda" if self._torch.cuda.is_available() else "cpu"
+        self._model.to(device)
+        self._model.eval()
         inputs = self._tokenizer(prompt, return_tensors="pt")
-        outputs = self._model.generate(
-            **inputs,
-            max_new_tokens=max_tokens,
-            do_sample=temperature > 0,
-            temperature=temperature,
-        )
-        text = self._tokenizer.decode(outputs[0], skip_special_tokens=True)
+        inputs = {key: value.to(device) for key, value in inputs.items()}
+        input_len = inputs["input_ids"].shape[-1]
+        with self._torch.no_grad():
+            outputs = self._model.generate(
+                **inputs,
+                max_new_tokens=max_tokens,
+                do_sample=temperature > 0,
+                temperature=temperature,
+            )
+        generated = outputs[0, input_len:]
+        text = self._tokenizer.decode(generated, skip_special_tokens=True).lstrip()
         return LLMResponse(text=text, model=self.model_path)

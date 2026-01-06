@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass
 
@@ -9,6 +10,8 @@ from .base import LLMBackend, LLMResponse
 @dataclass
 class MockBackend(LLMBackend):
     model_name: str = "mock-model"
+    seed: int = 1337
+    baseline_success_rate: float = 0.35
 
     def generate(self, prompt: str, max_tokens: int, temperature: float) -> LLMResponse:
         code = self._generate_code(prompt)
@@ -17,11 +20,63 @@ class MockBackend(LLMBackend):
     def _generate_code(self, prompt: str) -> str:
         function_name = self._extract_function_name(prompt)
         signature = self._extract_signature(prompt)
-        memory_code = self._extract_memory_code(prompt)
+
+        example_code = self._extract_example_code(prompt)
+        memory_code = self._extract_memory_context_code(prompt)
+
+        if example_code:
+            adapted = self._adapt_example(example_code, function_name, signature, prompt)
+            return adapted or self._rename_example(example_code, function_name, signature)
 
         if memory_code:
-            return memory_code
+            adapted = self._adapt_example(memory_code, function_name, signature, prompt)
+            return adapted or self._rename_example(memory_code, function_name, signature)
 
+        if self._has_learned_signal(prompt):
+            synthesized = self._synthesize_solution(function_name, signature, prompt)
+            if synthesized:
+                return synthesized
+
+        if self._should_attempt(function_name):
+            synthesized = self._synthesize_solution(function_name, signature, prompt)
+            if synthesized:
+                return synthesized
+
+        return f"def {function_name}{signature}:\n    return None\n"
+
+    def _should_attempt(self, function_name: str) -> bool:
+        digest = hashlib.sha256(f"{self.seed}:{function_name}".encode("utf-8")).hexdigest()
+        bucket = int(digest[:8], 16) % 100
+        return bucket < int(self.baseline_success_rate * 100)
+
+    def _adapt_example(self, example_code: str, function_name: str, signature: str, prompt: str) -> str | None:
+        if "add_const" in function_name and re.search(r"return\s+n\s*\+\s*\d+", example_code):
+            value = int(function_name.split("_")[-1])
+            return f"def {function_name}{signature}:\n    return n + {value}\n"
+        if "mul_const" in function_name and re.search(r"return\s+n\s*\*\s*\d+", example_code):
+            value = int(function_name.split("_")[-1])
+            return f"def {function_name}{signature}:\n    return n * {value}\n"
+        if "is_divisible_by" in function_name and re.search(r"return\s+n\s*%\s*\d+\s*==\s*0", example_code):
+            value = int(function_name.split("_")[-1])
+            return f"def {function_name}{signature}:\n    return n % {value} == 0\n"
+        if "power_" in function_name and re.search(r"return\s+n\s*\*\*\s*\d+", example_code):
+            value = int(function_name.split("_")[-1])
+            return f"def {function_name}{signature}:\n    return n ** {value}\n"
+        example_name = self._extract_def_name(example_code)
+        if example_name and example_name == function_name:
+            return self._rename_example(example_code, function_name, signature)
+        return None
+
+    @staticmethod
+    def _rename_example(example_code: str, function_name: str, signature: str) -> str:
+        lines = example_code.strip().splitlines()
+        if not lines:
+            return f"def {function_name}{signature}:\n    return None\n"
+        if lines[0].startswith("def "):
+            lines[0] = f"def {function_name}{signature}:"
+        return "\n".join(lines).rstrip() + "\n"
+
+    def _synthesize_solution(self, function_name: str, signature: str, prompt: str) -> str | None:
         if "add_const" in function_name:
             value = int(function_name.split("_")[-1])
             return f"def {function_name}{signature}:\n    return n + {value}\n"
@@ -376,7 +431,31 @@ class MockBackend(LLMBackend):
                 "    return len(str(abs(n)))\n"
             )
 
-        return f"def {function_name}{signature}:\n    return None\n"
+        return None
+
+    @staticmethod
+    def _extract_def_name(code: str) -> str | None:
+        match = re.search(r"def\s+(\w+)\(", code)
+        if match:
+            return match.group(1)
+        return None
+
+    @staticmethod
+    def _has_learned_signal(prompt: str) -> bool:
+        hints = (
+            "normalize case and remove non-alphanumeric",
+            "vowel counting",
+            "iterative accumulation",
+            "factorial can be computed",
+            "trial division",
+            "median can be found",
+            "mode can be computed",
+            "preserve order by tracking seen",
+            "use python built-ins like sum(values)",
+            "use slicing [::-1] or reversed()",
+        )
+        lowered = prompt.lower()
+        return "memory context" in lowered and any(hint in lowered for hint in hints)
 
     @staticmethod
     def _extract_function_name(prompt: str) -> str:
@@ -399,7 +478,7 @@ class MockBackend(LLMBackend):
         return "()"
 
     @staticmethod
-    def _extract_memory_code(prompt: str) -> str | None:
+    def _extract_example_code(prompt: str) -> str | None:
         marker = "EXAMPLE_CODE_START"
         if marker not in prompt:
             return None
@@ -409,6 +488,23 @@ class MockBackend(LLMBackend):
             code = chunks.split(end_marker, 1)[0]
         else:
             code = chunks
+        code = code.strip()
+        if not code.startswith("def"):
+            return None
+        return code + "\n"
+
+    @staticmethod
+    def _extract_memory_context_code(prompt: str) -> str | None:
+        if "Memory Context:" not in prompt:
+            return None
+        snippet = prompt.split("Memory Context:", 1)[1]
+        match = re.search(r"(def[\s\S]+)", snippet)
+        if not match:
+            return None
+        code = match.group(1)
+        for stopper in ("\n- [", "\nEXAMPLE_CODE_START"):
+            if stopper in code:
+                code = code.split(stopper, 1)[0]
         code = code.strip()
         if not code.startswith("def"):
             return None

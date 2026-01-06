@@ -6,11 +6,13 @@ import sys
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
+import pytest
+
 from recursive_slm_lab.memory import init_db, connect, consolidate
 from recursive_slm_lab.tasks import load_tasks, split_tasks
 from recursive_slm_lab.llm.mock import MockBackend
 from recursive_slm_lab.loop import run_iteration
-from recursive_slm_lab.eval import evaluate_conditions
+from recursive_slm_lab.eval import evaluate_conditions, plot_results
 
 
 def test_smoke_pipeline(tmp_path: Path) -> None:
@@ -21,10 +23,10 @@ def test_smoke_pipeline(tmp_path: Path) -> None:
     train_pool, heldout = split_tasks(tasks, heldout_size=10)
 
     conn = connect(db_path)
-    backend = MockBackend()
+    backend = MockBackend(baseline_success_rate=0.7)
     run_iteration(
         conn,
-        tasks=train_pool[:5],
+        tasks=heldout[:5],
         backend=backend,
         k=3,
         max_tokens=128,
@@ -44,7 +46,22 @@ def test_smoke_pipeline(tmp_path: Path) -> None:
         heldout_size=10,
         output_path=str(output_path),
     )
+    _ = evaluate_conditions(
+        db_path=str(db_path),
+        backend_name="mock",
+        conditions=["baseline", "memory", "learning", "memory_learning"],
+        k=1,
+        heldout_size=10,
+        output_path=None,
+    )
 
     assert output_path.exists()
     payload = json.loads(output_path.read_text())
     assert len(payload["conditions"]) == 4
+    scores = {item["condition"]: item["pass_at_1"] for item in results["conditions"]}
+    assert scores["baseline"] < scores["memory"]
+
+    pytest.importorskip("matplotlib")
+    plot_path = tmp_path / "results.png"
+    plot_results(str(db_path), str(plot_path))
+    assert plot_path.exists()

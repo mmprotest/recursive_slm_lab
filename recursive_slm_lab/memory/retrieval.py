@@ -30,6 +30,9 @@ class MemoryContext:
                 return hit.text.strip()
         return None
 
+    def filter_sources(self, allowed: set[str]) -> MemoryContext:
+        return MemoryContext(hits=[hit for hit in self.hits if hit.source in allowed])
+
 
 def retrieve_memory(conn: sqlite3.Connection, query: str, top_n: int = 3) -> MemoryContext:
     hits: list[MemoryHit] = []
