@@ -5,8 +5,8 @@ A runnable demo for persistent memory plus continuous learning using verificatio
 This repo evaluates four conditions:
 1. Baseline (no memory, no learning)
 2. Memory only
-3. Learning only
-4. Memory plus Learning
+3. Semantic memory only (mock backend)
+4. Memory plus learning (adapters when available)
 
 The system attempts tasks, verifies candidates with unit tests, stores only passing episodes in SQLite, consolidates memory into rules and procedures, and optionally trains LoRA adapters on verified traces.
 
@@ -30,15 +30,16 @@ scripts/run_demo.ps1
 
 Artifacts are written under `./artifacts/`.
 Each eval run is also stored in the SQLite DB so plots can show progress across iterations.
+Set `RSLM_FAST_VERIFY=1` to use a lightweight assert harness instead of pytest when tasks provide `assert_tests`.
 
 ## CLI overview
 
 ```bash
 rslm init-db --db artifacts/memory.sqlite
 rslm seed-tasks
-rslm run-iteration --db artifacts/memory.sqlite --tasks bundled --k 8 --mode trainpool --backend mock --memory-enabled
+rslm run-iteration --db artifacts/memory.sqlite --tasks bundled --k 4 --mode trainpool --backend mock --memory-enabled --heldout-size 20 --task-limit 30
 rslm consolidate --db artifacts/memory.sqlite --min-evidence 1 --backend mock
-rslm eval --db artifacts/memory.sqlite --backend mock --conditions all --k 1 --heldout-size 40 --output artifacts/results_iter001.json
+rslm eval --db artifacts/memory.sqlite --backend mock --conditions all --k 1 --heldout-size 20 --task-limit 20 --output artifacts/results_iter001.json
 rslm plot --input artifacts/memory.sqlite --output artifacts/results.png
 ```
 
@@ -72,3 +73,4 @@ If optional dependencies are missing, the command exits cleanly with a clear mes
 
 - Python sandboxing is not perfectly safe. The verifier applies best-effort isolation but cannot guarantee complete security.
 - Memory is only written for passing episodes, and training only uses verified traces.
+- For the mock backend, the evaluation label uses "semantic" for rules and procedures instead of "learning".

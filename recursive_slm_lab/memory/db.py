@@ -65,6 +65,44 @@ def insert_episode(
     conn.commit()
 
 
+def insert_episode_many(
+    conn: sqlite3.Connection,
+    rows: list[tuple[str, str, str, str, bool, str]],
+) -> None:
+    if not rows:
+        return
+    episode_rows: list[tuple[str, str, str, str, int, str, str, str]] = []
+    failure_rows: list[tuple[str, str, str, str, int, str, str, str]] = []
+    for task_id, condition, prompt, candidate_code, passed, test_log in rows:
+        code_hash = hashlib.sha256(candidate_code.encode("utf-8")).hexdigest()
+        created_at = _utc_now()
+        values = (task_id, condition, prompt, candidate_code, int(passed), test_log, created_at, code_hash)
+        if passed:
+            episode_rows.append(values)
+        else:
+            failure_rows.append(values)
+
+    if episode_rows:
+        conn.executemany(
+            """
+            INSERT INTO episodes
+            (task_id, condition, prompt, candidate_code, passed, test_log, created_at, code_hash)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            episode_rows,
+        )
+    if failure_rows:
+        conn.executemany(
+            """
+            INSERT INTO failures
+            (task_id, condition, prompt, candidate_code, passed, test_log, created_at, code_hash)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            failure_rows,
+        )
+    conn.commit()
+
+
 def fetch_passed_episodes(conn: sqlite3.Connection) -> list[Episode]:
     rows = conn.execute(
         """
