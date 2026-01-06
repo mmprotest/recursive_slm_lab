@@ -64,6 +64,8 @@ def cli_run_iteration(
     memory_enabled: bool = typer.Option(
         False, "--memory-enabled/--no-memory", help="Enable memory retrieval"
     ),
+    heldout_size: int = typer.Option(40, help="Heldout size for splitting"),
+    task_limit: Optional[int] = typer.Option(None, help="Limit number of tasks"),
 ) -> None:
     config = Config(
         db_path=db,
@@ -75,8 +77,10 @@ def cli_run_iteration(
     )
 
     all_tasks = load_tasks()
-    train_pool, heldout = split_tasks(all_tasks, heldout_size=40)
+    train_pool, heldout = split_tasks(all_tasks, heldout_size=heldout_size)
     selected = train_pool if mode == "trainpool" else heldout
+    if task_limit is not None:
+        selected = selected[:task_limit]
 
     conn = connect(db)
     backend_impl = _resolve_backend(config)
@@ -115,10 +119,14 @@ def cli_eval(
     conditions: str = typer.Option("all", help="all or comma-separated list"),
     k: int = typer.Option(1, help="pass@k"),
     heldout_size: int = typer.Option(40, help="Heldout size"),
+    task_limit: Optional[int] = typer.Option(None, help="Limit number of heldout tasks"),
     output: Optional[str] = typer.Option(None, help="Optional output JSON"),
 ) -> None:
     if conditions == "all":
-        condition_list = ["baseline", "memory", "learning", "memory_learning"]
+        if backend == "mock":
+            condition_list = ["baseline", "memory", "semantic", "memory_learning"]
+        else:
+            condition_list = ["baseline", "memory", "learning", "memory_learning"]
     else:
         condition_list = [c.strip() for c in conditions.split(",") if c.strip()]
     payload = evaluate_conditions(
@@ -127,6 +135,7 @@ def cli_eval(
         conditions=condition_list,
         k=k,
         heldout_size=heldout_size,
+        task_limit=task_limit,
         output_path=output,
     )
     if output:

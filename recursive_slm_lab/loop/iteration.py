@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..memory import insert_episode, retrieve_memory
+from ..memory import insert_episode_many, retrieve_memory
 from ..verify import verify_candidate
 from ..tasks import Task
 from ..llm.base import LLMBackend
@@ -30,7 +30,8 @@ def run_iteration(
     for task in tasks:
         memory_context = None
         if memory_enabled:
-            memory_context = retrieve_memory(conn, task.prompt)
+            extra_terms = [task.function_name.rsplit("_", 1)[0], task.function_name]
+            memory_context = retrieve_memory(conn, task.prompt, extra_terms=extra_terms)
         candidates = generate_candidates(
             backend,
             task_prompt=task.prompt,
@@ -42,18 +43,21 @@ def run_iteration(
             temperature=temperature,
         )
         passed_any = False
+        episode_rows: list[tuple[str, str, str, str, bool, str]] = []
         for candidate in candidates:
-            verification = verify_candidate(candidate.code, task.reference_tests)
-            insert_episode(
-                conn,
-                task_id=task.task_id,
-                condition=condition,
-                prompt=candidate.prompt,
-                candidate_code=candidate.code,
-                passed=verification.passed,
-                test_log=verification.log,
+            verification = verify_candidate(candidate.code, task.reference_tests, task.assert_tests)
+            episode_rows.append(
+                (
+                    task.task_id,
+                    condition,
+                    candidate.prompt,
+                    candidate.code,
+                    verification.passed,
+                    verification.log,
+                )
             )
             if verification.passed:
                 passed_any = True
+        insert_episode_many(conn, episode_rows)
         results.append(IterationResult(task_id=task.task_id, passed=passed_any, attempts=len(candidates)))
     return results

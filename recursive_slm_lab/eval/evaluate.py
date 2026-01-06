@@ -43,11 +43,14 @@ def evaluate_conditions(
     conditions: list[str],
     k: int,
     heldout_size: int,
+    task_limit: int | None,
     output_path: str | None,
 ) -> dict:
     config = Config(db_path=db_path, backend=backend_name)
     tasks = load_tasks()
     _, heldout = split_tasks(tasks, heldout_size=heldout_size)
+    if task_limit is not None:
+        heldout = heldout[:task_limit]
 
     conn = connect(db_path)
     results: list[ConditionResult] = []
@@ -55,25 +58,33 @@ def evaluate_conditions(
     active_adapter = get_active_adapter(conn)
 
     for condition in conditions:
-        memory_enabled = condition in {"memory", "memory_learning"}
-        learning_enabled = condition in {"learning", "memory_learning"}
         notes = ""
 
         adapter_path = active_adapter[1] if active_adapter else None
         backend, backend_label = _build_backend(config, condition, adapter_path)
-        if learning_enabled and backend_label != "localhf":
-            notes = "Learning requested but backend does not support local adapters; using baseline inference."
+        effective_condition = condition
+        if backend_label == "mock" and condition == "learning":
+            effective_condition = "semantic"
+
+        memory_enabled = effective_condition in {"memory", "memory_learning"}
+        semantic_enabled = effective_condition in {"semantic", "memory_learning"}
+        learning_enabled = condition in {"learning", "memory_learning"}
+
+        baseline_learning = condition == "learning" and backend_label != "localhf" and effective_condition == "learning"
+        if baseline_learning:
+            notes = "Learning requested but adapters unavailable; running baseline."
         if learning_enabled and backend_label == "localhf" and not active_adapter:
             notes = "Learning requested but no active adapter is set; using base model."
 
         outcomes: list[list[bool]] = []
         for task in heldout:
             memory_context = None
-            if memory_enabled or learning_enabled:
-                memory_context = retrieve_memory(conn, task.prompt)
-                if memory_enabled and not learning_enabled and memory_context:
+            if (memory_enabled or semantic_enabled) and not baseline_learning:
+                extra_terms = [task.function_name.rsplit("_", 1)[0], task.function_name]
+                memory_context = retrieve_memory(conn, task.prompt, extra_terms=extra_terms)
+                if memory_enabled and not semantic_enabled and memory_context:
                     memory_context = memory_context.filter_sources({"episode"})
-                if learning_enabled and not memory_enabled and memory_context:
+                if semantic_enabled and not memory_enabled and memory_context:
                     memory_context = memory_context.filter_sources({"rule", "procedure"})
             candidates = generate_candidates(
                 backend,
@@ -87,11 +98,11 @@ def evaluate_conditions(
             )
             task_outcomes: list[bool] = []
             for cand in candidates:
-                verification = verify_candidate(cand.code, task.reference_tests)
+                verification = verify_candidate(cand.code, task.reference_tests, task.assert_tests)
                 task_outcomes.append(verification.passed)
             outcomes.append(task_outcomes)
         summary = compute_pass_rates(outcomes, k=k)
-        results.append(ConditionResult(condition, outcomes, summary, notes))
+        results.append(ConditionResult(effective_condition, outcomes, summary, notes))
 
     task_map = {task.task_id: task for task in tasks}
     memory_precision = _memory_precision(conn, task_map, sample_size=10)
@@ -138,7 +149,7 @@ def _memory_precision(conn, task_map: dict[str, Task], sample_size: int = 10) ->
         task = task_map.get(ep.task_id)
         if not task:
             continue
-        verification = verify_candidate(ep.candidate_code, task.reference_tests)
+        verification = verify_candidate(ep.candidate_code, task.reference_tests, task.assert_tests)
         if verification.passed:
             passed += 1
     return passed / len(sample)

@@ -15,7 +15,12 @@ class SandboxResult:
     returncode: int
 
 
-def run_in_sandbox(solution_code: str, test_code: str, timeout_s: int = 8) -> SandboxResult:
+def run_in_sandbox(
+    solution_code: str,
+    test_code: str,
+    assert_tests: list[str] | None = None,
+    timeout_s: int = 8,
+) -> SandboxResult:
     """Run pytest in a temporary directory with best-effort isolation.
 
     Note: Python sandboxing is not perfectly safe. This applies a best-effort
@@ -24,7 +29,17 @@ def run_in_sandbox(solution_code: str, test_code: str, timeout_s: int = 8) -> Sa
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_path = Path(temp_dir)
         (temp_path / "solution.py").write_text(solution_code, encoding="utf-8")
-        (temp_path / "test_solution.py").write_text(test_code, encoding="utf-8")
+        use_fast = os.environ.get("RSLM_FAST_VERIFY") == "1" and assert_tests
+        if use_fast:
+            harness_lines = ["from solution import *", "", "def run():"] + [
+                f"    {assert_test}" for assert_test in assert_tests
+            ]
+            harness_lines.append("")
+            harness_lines.append("if __name__ == '__main__':")
+            harness_lines.append("    run()")
+            (temp_path / "harness.py").write_text("\n".join(harness_lines), encoding="utf-8")
+        else:
+            (temp_path / "test_solution.py").write_text(test_code, encoding="utf-8")
 
         env = {
             "PATH": os.environ.get("PATH", ""),
@@ -37,8 +52,13 @@ def run_in_sandbox(solution_code: str, test_code: str, timeout_s: int = 8) -> Sa
         }
 
         try:
+            command = (
+                ["python", "harness.py"]
+                if use_fast
+                else ["python", "-m", "pytest", "-q", "-p", "no:cov", "-p", "no:ddtrace"]
+            )
             proc = subprocess.run(
-                ["python", "-m", "pytest", "-q", "-p", "no:cov", "-p", "no:ddtrace"],
+                command,
                 cwd=temp_path,
                 env=env,
                 capture_output=True,

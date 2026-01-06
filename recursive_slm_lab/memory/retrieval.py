@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import sqlite3
 from dataclasses import dataclass
 
@@ -34,9 +35,30 @@ class MemoryContext:
         return MemoryContext(hits=[hit for hit in self.hits if hit.source in allowed])
 
 
-def retrieve_memory(conn: sqlite3.Connection, query: str, top_n: int = 3) -> MemoryContext:
+def normalize_query(text: str) -> str:
+    cleaned = re.sub(r"[^a-z0-9]+", " ", text.lower())
+    tokens = [token for token in cleaned.split() if not token.isdigit()]
+    return " ".join(tokens)
+
+
+def retrieve_memory(
+    conn: sqlite3.Connection,
+    query: str,
+    top_n: int = 3,
+    extra_terms: list[str] | None = None,
+) -> MemoryContext:
     hits: list[MemoryHit] = []
-    safe_query = " ".join("".join(ch if ch.isalnum() else " " for ch in query).split())
+    normalized = normalize_query(query)
+    query_tokens = normalized.split() if normalized else []
+    extra_tokens: list[str] = []
+    if extra_terms:
+        for term in extra_terms:
+            extra_tokens.extend(normalize_query(term).split())
+    if not query_tokens:
+        query_tokens = extra_tokens
+    else:
+        query_tokens.extend(extra_tokens)
+    safe_query = " ".join(query_tokens)
     if not safe_query:
         return MemoryContext(hits=hits)
     episode_rows = conn.execute(

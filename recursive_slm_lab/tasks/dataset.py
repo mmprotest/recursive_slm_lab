@@ -14,6 +14,7 @@ class Task:
     function_name: str
     signature: str
     reference_tests: str
+    assert_tests: list[str] | None = None
 
 
 BUNDLED_PATH = Path(__file__).parent / "bundled_tasks.jsonl"
@@ -43,6 +44,8 @@ def validate_tasks(tasks: Iterable[Task]) -> None:
             raise ValueError(f"signature invalid for {task.task_id}")
         if "def" in task.reference_tests and "pytest" not in task.reference_tests:
             raise ValueError(f"reference_tests missing pytest usage for {task.task_id}")
+        if task.assert_tests is not None and not task.assert_tests:
+            raise ValueError(f"assert_tests empty for {task.task_id}")
 
 
 def split_tasks(tasks: list[Task], heldout_size: int, seed: int = 1337) -> tuple[list[Task], list[Task]]:
