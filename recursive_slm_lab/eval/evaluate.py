@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 from ..config import Config
@@ -42,7 +43,7 @@ def evaluate_conditions(
     conditions: list[str],
     k: int,
     heldout_size: int,
-    output_path: str,
+    output_path: str | None,
 ) -> dict:
     config = Config(db_path=db_path, backend=backend_name)
     tasks = load_tasks()
@@ -67,7 +68,13 @@ def evaluate_conditions(
 
         outcomes: list[list[bool]] = []
         for task in heldout:
-            memory_context = retrieve_memory(conn, task.prompt) if memory_enabled else None
+            memory_context = None
+            if memory_enabled or learning_enabled:
+                memory_context = retrieve_memory(conn, task.prompt)
+                if memory_enabled and not learning_enabled and memory_context:
+                    memory_context = memory_context.filter_sources({"episode"})
+                if learning_enabled and not memory_enabled and memory_context:
+                    memory_context = memory_context.filter_sources({"rule", "procedure"})
             candidates = generate_candidates(
                 backend,
                 task_prompt=task.prompt,
@@ -104,8 +111,19 @@ def evaluate_conditions(
         "regression_check": regression_info,
     }
 
-    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-    Path(output_path).write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    created_at = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        """
+        INSERT INTO eval_runs (created_at, heldout_size, k, backend, payload_json)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (created_at, heldout_size, k, backend_name, json.dumps(payload)),
+    )
+    conn.commit()
+
+    if output_path:
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(output_path).write_text(json.dumps(payload, indent=2), encoding="utf-8")
     conn.close()
     return payload
 

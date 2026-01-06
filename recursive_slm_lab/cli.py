@@ -61,6 +61,9 @@ def cli_run_iteration(
     model: Optional[str] = typer.Option(None, help="Model name"),
     temperature: float = typer.Option(0.2, help="Sampling temperature"),
     max_tokens: int = typer.Option(256, help="Max tokens"),
+    memory_enabled: bool = typer.Option(
+        False, "--memory-enabled/--no-memory", help="Enable memory retrieval"
+    ),
 ) -> None:
     config = Config(
         db_path=db,
@@ -84,7 +87,7 @@ def cli_run_iteration(
         k=k,
         max_tokens=max_tokens,
         temperature=temperature,
-        memory_enabled=True,
+        memory_enabled=memory_enabled,
         condition=mode,
     )
     conn.close()
@@ -112,7 +115,7 @@ def cli_eval(
     conditions: str = typer.Option("all", help="all or comma-separated list"),
     k: int = typer.Option(1, help="pass@k"),
     heldout_size: int = typer.Option(40, help="Heldout size"),
-    output: str = typer.Option("artifacts/results.json", help="Output JSON"),
+    output: Optional[str] = typer.Option(None, help="Optional output JSON"),
 ) -> None:
     if conditions == "all":
         condition_list = ["baseline", "memory", "learning", "memory_learning"]
@@ -126,7 +129,8 @@ def cli_eval(
         heldout_size=heldout_size,
         output_path=output,
     )
-    print(f"Saved results to {output}")
+    if output:
+        print(f"Saved results to {output}")
     print(payload)
 
 

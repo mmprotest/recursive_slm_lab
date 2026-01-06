@@ -46,6 +46,15 @@ CREATE TABLE IF NOT EXISTS adapters (
     active INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS eval_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL,
+    heldout_size INTEGER NOT NULL,
+    k INTEGER NOT NULL,
+    backend TEXT NOT NULL,
+    payload_json TEXT NOT NULL
+);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS episodes_fts USING fts5(
     prompt, candidate_code, test_log, content='episodes', content_rowid='id'
 );
