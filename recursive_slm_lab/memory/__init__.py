@@ -9,6 +9,9 @@ from .db import (
     register_adapter,
     rollback_adapter,
     get_active_adapter,
+    mark_task_seen,
+    fetch_seen_task_ids,
+    wipe_memory,
 )
 from .retrieval import retrieve_memory, MemoryContext
 from .consolidation import consolidate
@@ -24,6 +27,9 @@ __all__ = [
     "register_adapter",
     "rollback_adapter",
     "get_active_adapter",
+    "mark_task_seen",
+    "fetch_seen_task_ids",
+    "wipe_memory",
     "retrieve_memory",
     "MemoryContext",
     "consolidate",

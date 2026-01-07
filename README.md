@@ -32,6 +32,55 @@ Artifacts are written under `./artifacts/`.
 Each eval run is also stored in the SQLite DB so plots can show progress across iterations.
 Set `RSLM_FAST_VERIFY=1` to use a lightweight assert harness instead of pytest when tasks provide `assert_tests`.
 
+## Real mode (Qwen3 4B reasoning)
+
+### A) LocalHF (recommended, enables LoRA learning)
+
+```bash
+pip install -e ".[localhf]"
+export RSLM_BACKEND=localhf
+export RSLM_HF_MODEL_ID=Qwen/Qwen3-4B-Thinking-2507
+bash scripts/run_real_demo.sh
+```
+
+Notes:
+- Requires `transformers>=4.51.0`.
+- The first run will download model weights from Hugging Face.
+- Qwen3 thinking output is stripped by removing the first `</think>` block and extracting the first python code fence.
+
+Quick smoke command (no training):
+
+```bash
+rslm eval --db artifacts_real/memory.sqlite --backend localhf --conditions baseline,memory --heldout-size 20
+```
+
+### B) OpenAI compatible server (inference only)
+
+Point the backend at an OpenAI-compatible server:
+
+```bash
+export RSLM_BACKEND=openai
+export RSLM_BASE_URL=http://localhost:8000/v1
+export RSLM_MODEL=your-model-name
+export RSLM_API_KEY=optional
+rslm eval --db artifacts_real/memory.sqlite --backend openai --conditions baseline,memory --heldout-size 20
+```
+
+Adapters cannot be applied in this mode, so the "learned" condition is unavailable and will run as baseline.
+
+### Environment variables
+
+- `RSLM_DB`: SQLite path (default: `artifacts/memory.sqlite`)
+- `RSLM_BACKEND`: `localhf`, `openai`, or `mock`
+- `RSLM_HF_MODEL_ID`: Hugging Face model id for LocalHF
+- `RSLM_BASE_URL`: OpenAI-compatible base URL
+- `RSLM_MODEL`: OpenAI-compatible model name
+- `RSLM_MAX_TOKENS`: generation length
+- `RSLM_TEMPERATURE`: sampling temperature
+- `RSLM_TOP_P`: nucleus sampling value
+- `RSLM_TOP_K`: top-k sampling value
+- `RSLM_FAST_VERIFY`: set to `1` to use assert-based fast verification
+
 ## CLI overview
 
 ```bash
@@ -76,11 +125,11 @@ The client uses the `chat.completions` API and works with OpenAI-compatible serv
 
 ## Local HF LoRA training
 
-Install optional dependencies and provide a local model path:
+Install optional dependencies and provide a local model id:
 
 ```bash
-pip install -e .[localhf]
-export RSLM_HF_MODEL_PATH=/path/to/local/model
+pip install -e .[localhf,train]
+export RSLM_HF_MODEL_ID=Qwen/Qwen3-4B-Thinking-2507
 rslm train-lora --db artifacts/memory.sqlite --out adapters/adapter_v001
 ```
 

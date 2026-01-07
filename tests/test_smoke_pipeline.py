@@ -35,6 +35,8 @@ def test_smoke_pipeline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
         k=2,
         max_tokens=64,
         temperature=0.0,
+        top_p=0.9,
+        top_k=50,
         memory_enabled=True,
         condition="trainpool",
     )

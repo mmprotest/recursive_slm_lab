@@ -10,5 +10,12 @@ class LLMResponse:
 
 
 class LLMBackend:
-    def generate(self, prompt: str, max_tokens: int, temperature: float) -> LLMResponse:
+    def generate(
+        self,
+        messages: list[dict[str, str]],
+        max_tokens: int,
+        temperature: float,
+        top_p: float,
+        top_k: int,
+    ) -> LLMResponse:
         raise NotImplementedError

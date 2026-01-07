@@ -12,16 +12,19 @@ dependencies = [
   "pytest>=7.0",
   "matplotlib>=3.7",
   "numpy>=1.24",
+  "packaging>=23.0",
 ]
 
 [project.optional-dependencies]
 localhf = [
-  "transformers>=4.40",
-  "datasets>=2.19",
-  "peft>=0.10",
-  "accelerate>=0.29",
-  "torch>=2.2",
-  "trl>=0.8",
+  "torch",
+  "transformers>=4.51.0",
+  "accelerate",
+  "peft",
+]
+train = [
+  "datasets",
+  "trl",
 ]
 
 [project.scripts]

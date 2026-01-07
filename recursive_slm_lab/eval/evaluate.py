@@ -20,6 +20,7 @@ class ConditionResult:
     outcomes: list[list[bool]]
     summary: MetricSummary
     notes: str
+    learned_unavailable: bool
 
 
 def _build_backend(config: Config, condition: str, adapter_path: str | None) -> tuple[object, str]:
@@ -31,9 +32,13 @@ def _build_backend(config: Config, condition: str, adapter_path: str | None) -> 
         return OpenAICompatBackend(config.base_url, config.model, config.api_key), "openai"
     if config.backend == "localhf":
         if not config.hf_model_path:
-            raise ValueError("RSLM_HF_MODEL_PATH required for localhf backend")
+            raise ValueError("RSLM_HF_MODEL_ID required for localhf backend")
         adapter = adapter_path if condition in {"learning", "memory_learning"} else None
-        return LocalHFBackend(config.hf_model_path, adapter_path=adapter), "localhf"
+        return LocalHFBackend(
+            config.hf_model_path,
+            adapter_path=adapter,
+            torch_dtype=config.torch_dtype,
+        ), "localhf"
     return MockBackend(), "mock"
 
 
@@ -45,6 +50,10 @@ def evaluate_conditions(
     heldout_size: int,
     task_limit: int | None,
     output_path: str | None,
+    max_tokens: int | None = None,
+    temperature: float | None = None,
+    top_p: float | None = None,
+    top_k: int | None = None,
 ) -> dict:
     config = Config(db_path=db_path, backend=backend_name)
     tasks = load_tasks()
@@ -57,8 +66,14 @@ def evaluate_conditions(
 
     active_adapter = get_active_adapter(conn)
 
+    max_tokens = max_tokens if max_tokens is not None else config.max_tokens
+    temperature = temperature if temperature is not None else config.temperature
+    top_p = top_p if top_p is not None else config.top_p
+    top_k = top_k if top_k is not None else config.top_k
+
     for condition in conditions:
         notes = ""
+        learned_unavailable = False
 
         adapter_path = active_adapter[1] if active_adapter else None
         backend, backend_label = _build_backend(config, condition, adapter_path)
@@ -73,6 +88,11 @@ def evaluate_conditions(
         baseline_learning = condition == "learning" and backend_label != "localhf" and effective_condition == "learning"
         if baseline_learning:
             notes = "Learning requested but adapters unavailable; running baseline."
+            learned_unavailable = True
+            memory_enabled = False
+            semantic_enabled = False
+            learning_enabled = False
+            effective_condition = "baseline"
         if learning_enabled and backend_label == "localhf" and not active_adapter:
             notes = "Learning requested but no active adapter is set; using base model."
 
@@ -93,8 +113,10 @@ def evaluate_conditions(
                 signature=task.signature,
                 memory_context=memory_context,
                 k=k,
-                max_tokens=config.max_tokens,
-                temperature=config.temperature,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                top_k=top_k,
             )
             task_outcomes: list[bool] = []
             for cand in candidates:
@@ -102,7 +124,9 @@ def evaluate_conditions(
                 task_outcomes.append(verification.passed)
             outcomes.append(task_outcomes)
         summary = compute_pass_rates(outcomes, k=k)
-        results.append(ConditionResult(effective_condition, outcomes, summary, notes))
+        results.append(
+            ConditionResult(effective_condition, outcomes, summary, notes, learned_unavailable)
+        )
 
     task_map = {task.task_id: task for task in tasks}
     memory_precision = _memory_precision(conn, task_map, sample_size=10)
@@ -115,6 +139,7 @@ def evaluate_conditions(
                 "pass_at_1": result.summary.pass_at_1,
                 "pass_at_k": result.summary.pass_at_k,
                 "notes": result.notes,
+                "learned_unavailable": result.learned_unavailable,
             }
             for result in results
         ],
