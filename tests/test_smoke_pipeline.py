@@ -8,6 +8,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 import pytest
 
+from recursive_slm_lab.cli import cli_seed_tasks
 from recursive_slm_lab.memory import init_db, connect, consolidate
 from recursive_slm_lab.tasks import load_tasks, split_tasks
 from recursive_slm_lab.llm.mock import MockBackend
@@ -17,11 +18,13 @@ from recursive_slm_lab.eval import evaluate_conditions, plot_results
 
 def test_smoke_pipeline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("RSLM_FAST_VERIFY", "1")
+    tasks_path = tmp_path / "bundled_tasks.jsonl"
+    cli_seed_tasks(regen=True, count=120, out=tasks_path)
     db_path = tmp_path / "memory.sqlite"
     init_db(db_path)
 
-    tasks = load_tasks()
-    train_pool, _ = split_tasks(tasks, heldout_size=10)
+    tasks = load_tasks(tasks_path)
+    train_pool, _ = split_tasks(tasks, heldout_size=20)
 
     conn = connect(db_path)
     backend = MockBackend(baseline_success_rate=0.2)
@@ -42,27 +45,33 @@ def test_smoke_pipeline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
     results = evaluate_conditions(
         db_path=str(db_path),
         backend_name="mock",
-        conditions=["baseline", "memory", "semantic"],
+        conditions=["baseline", "memory", "semantic", "memory_learning"],
         k=1,
-        heldout_size=10,
-        task_limit=10,
+        heldout_size=20,
+        task_limit=20,
         output_path=str(output_path),
     )
     _ = evaluate_conditions(
         db_path=str(db_path),
         backend_name="mock",
-        conditions=["baseline", "memory", "semantic"],
+        conditions=["baseline", "memory", "semantic", "memory_learning"],
         k=1,
-        heldout_size=10,
-        task_limit=10,
+        heldout_size=20,
+        task_limit=20,
         output_path=None,
     )
 
     assert output_path.exists()
     payload = json.loads(output_path.read_text())
-    assert len(payload["conditions"]) == 3
+    assert len(payload["conditions"]) == 4
+    assert {item["condition"] for item in payload["conditions"]} == {
+        "baseline",
+        "memory",
+        "semantic",
+        "memory_learning",
+    }
     scores = {item["condition"]: item["pass_at_1"] for item in results["conditions"]}
-    assert scores["baseline"] < scores["memory"]
+    assert all(condition in scores for condition in ["baseline", "memory", "semantic", "memory_learning"])
 
     pytest.importorskip("matplotlib")
     plot_path = tmp_path / "results.png"

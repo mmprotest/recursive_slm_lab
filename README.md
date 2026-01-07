@@ -43,6 +43,23 @@ rslm eval --db artifacts/memory.sqlite --backend mock --conditions all --k 1 --h
 rslm plot --input artifacts/memory.sqlite --output artifacts/results.png
 ```
 
+## Generate tasks
+
+Regenerate the bundled task set with deterministic, hidden pytest tests:
+
+```bash
+rslm seed-tasks --regen --count 200
+```
+
+Then run a short iteration and evaluation:
+
+```bash
+rslm run-iteration --db artifacts/memory.sqlite --tasks bundled --k 4 --mode trainpool --backend mock --memory-enabled --heldout-size 20 --task-limit 20
+rslm eval --db artifacts/memory.sqlite --backend mock --conditions all --k 1 --heldout-size 20 --task-limit 20 --output artifacts/results_iter001.json
+```
+
+Task tests are stored only in the verifier and are not exposed to the model prompts.
+
 ## OpenAI-compatible backend
 
 Set a local server URL and model name:
