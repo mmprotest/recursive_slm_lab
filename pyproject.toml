@@ -3,7 +3,7 @@ name = "recursive-slm-lab"
 version = "0.1.0"
 description = "Persistent memory + continuous learning demo with verification-gated recursion."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 dependencies = [
   "typer>=0.9",
   "pydantic>=2.0",
@@ -17,14 +17,16 @@ dependencies = [
 
 [project.optional-dependencies]
 localhf = [
-  "torch",
-  "transformers>=4.51.0",
-  "accelerate",
-  "peft",
+  "torch>=2.5,<2.6",
+  "transformers>=4.51,<5",
+  "accelerate>=1.0,<2",
+  "peft>=0.13,<1",
+  "safetensors>=0.4.3",
+  "huggingface-hub>=0.34,<1",
 ]
 train = [
-  "datasets",
-  "trl",
+  "datasets>=2.19,<3",
+  "trl>=0.9,<1",
 ]
 
 [project.scripts]
@@ -33,6 +35,9 @@ rslm = "recursive_slm_lab.cli:app"
 [build-system]
 requires = ["setuptools>=65", "wheel"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["recursive_slm_lab"]
 
 [tool.setuptools.package-data]
 recursive_slm_lab = ["tasks/bundled_tasks.jsonl", "memory/schema.sql"]
