@@ -161,3 +161,27 @@ def get_active_adapter(conn: sqlite3.Connection) -> tuple[str, str] | None:
     if not row:
         return None
     return row[0], row[1]
+
+
+def mark_task_seen(conn: sqlite3.Connection, task_id: str) -> None:
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO train_progress (task_id, first_seen_at)
+        VALUES (?, ?)
+        """,
+        (task_id, _utc_now()),
+    )
+    conn.commit()
+
+
+def fetch_seen_task_ids(conn: sqlite3.Connection) -> set[str]:
+    rows = conn.execute("SELECT task_id FROM train_progress").fetchall()
+    return {row[0] for row in rows}
+
+
+def wipe_memory(conn: sqlite3.Connection) -> None:
+    conn.execute("DELETE FROM episodes")
+    conn.execute("DELETE FROM failures")
+    conn.execute("DELETE FROM semantic_rules")
+    conn.execute("DELETE FROM procedures")
+    conn.commit()

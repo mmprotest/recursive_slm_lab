@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..memory import insert_episode_many, retrieve_memory
+from ..memory import insert_episode_many, retrieve_memory, mark_task_seen
 from ..verify import verify_candidate
 from ..tasks import Task
 from ..llm.base import LLMBackend
@@ -23,11 +23,14 @@ def run_iteration(
     k: int,
     max_tokens: int,
     temperature: float,
+    top_p: float,
+    top_k: int,
     memory_enabled: bool,
     condition: str,
 ) -> list[IterationResult]:
     results: list[IterationResult] = []
     for task in tasks:
+        mark_task_seen(conn, task.task_id)
         memory_context = None
         if memory_enabled:
             extra_terms = [task.function_name.rsplit("_", 1)[0], task.function_name]
@@ -41,6 +44,8 @@ def run_iteration(
             k=k,
             max_tokens=max_tokens,
             temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
         )
         passed_any = False
         episode_rows: list[tuple[str, str, str, str, bool, str]] = []

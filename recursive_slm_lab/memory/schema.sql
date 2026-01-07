@@ -55,6 +55,11 @@ CREATE TABLE IF NOT EXISTS eval_runs (
     payload_json TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS train_progress (
+    task_id TEXT PRIMARY KEY,
+    first_seen_at TEXT NOT NULL
+);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS episodes_fts USING fts5(
     prompt, candidate_code, test_log, content='episodes', content_rowid='id'
 );

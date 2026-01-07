@@ -13,7 +13,19 @@ class MockBackend(LLMBackend):
     seed: int = 1337
     baseline_success_rate: float = 0.35
 
-    def generate(self, prompt: str, max_tokens: int, temperature: float) -> LLMResponse:
+    def generate(
+        self,
+        messages: list[dict[str, str]],
+        max_tokens: int,
+        temperature: float,
+        top_p: float,
+        top_k: int,
+    ) -> LLMResponse:
+        _ = max_tokens, temperature, top_p, top_k
+        prompt = ""
+        for message in messages:
+            if message.get("role") == "user":
+                prompt = message.get("content", "")
         code = self._generate_code(prompt)
         return LLMResponse(text=code, model=self.model_name)
 
@@ -203,316 +215,160 @@ class MockBackend(LLMBackend):
                 "    if not values:\n"
                 "        return None\n"
                 "    sorted_vals = sorted(values)\n"
-                "    mid = len(sorted_vals) // 2\n"
-                "    if len(sorted_vals) % 2 == 1:\n"
+                "    mid = len(values) // 2\n"
+                "    if len(values) % 2 == 1:\n"
                 "        return sorted_vals[mid]\n"
                 "    return (sorted_vals[mid - 1] + sorted_vals[mid]) / 2\n"
             )
-        if function_name == "mode":
+        if function_name == "count_unique":
             return (
                 f"def {function_name}{signature}:\n"
-                "    counts = {}\n"
-                "    for item in values:\n"
-                "        counts[item] = counts.get(item, 0) + 1\n"
-                "    max_count = max(counts.values())\n"
-                "    candidates = [k for k, v in counts.items() if v == max_count]\n"
-                "    return min(candidates)\n"
-            )
-        if function_name == "flatten_list":
-            return (
-                f"def {function_name}{signature}:\n"
-                "    return [item for sub in values for item in sub]\n"
-            )
-        if function_name == "pairwise_sum":
-            return (
-                f"def {function_name}{signature}:\n"
-                "    return [values[i] + values[i + 1] for i in range(len(values) - 1)]\n"
-            )
-        if function_name == "even_numbers":
-            return (
-                f"def {function_name}{signature}:\n"
-                "    return [v for v in values if v % 2 == 0]\n"
-            )
-        if function_name == "odd_numbers":
-            return (
-                f"def {function_name}{signature}:\n"
-                "    return [v for v in values if v % 2 == 1]\n"
+                "    return len(set(values))\n"
             )
         if function_name == "remove_negatives":
             return (
                 f"def {function_name}{signature}:\n"
-                "    return [v for v in values if v >= 0]\n"
+                "    return [value for value in values if value >= 0]\n"
             )
-        if function_name == "dict_keys_sorted":
+        if function_name == "sum_even":
             return (
                 f"def {function_name}{signature}:\n"
-                "    return sorted(mapping.keys())\n"
+                "    return sum(value for value in values if value % 2 == 0)\n"
             )
-        if function_name == "dict_values_sum":
+        if function_name == "count_uppercase":
             return (
                 f"def {function_name}{signature}:\n"
-                "    return sum(mapping.values())\n"
+                "    return sum(1 for ch in text if ch.isupper())\n"
             )
-        if function_name == "invert_dict":
+        if function_name == "flatten":
             return (
                 f"def {function_name}{signature}:\n"
-                "    return {v: k for k, v in mapping.items()}\n"
+                "    result = []\n"
+                "    for row in matrix:\n"
+                "        result.extend(row)\n"
+                "    return result\n"
             )
-        if function_name == "merge_dicts":
+        if function_name == "pairwise_sum":
             return (
                 f"def {function_name}{signature}:\n"
-                "    merged = dict(a)\n"
-                "    merged.update(b)\n"
-                "    return merged\n"
-            )
-        if function_name == "count_char":
-            return (
-                f"def {function_name}{signature}:\n"
-                "    return text.count(char)\n"
-            )
-        if function_name == "starts_with_vowel":
-            return (
-                f"def {function_name}{signature}:\n"
-                "    return bool(text) and text[0].lower() in 'aeiou'\n"
-            )
-        if function_name == "ends_with_vowel":
-            return (
-                f"def {function_name}{signature}:\n"
-                "    return bool(text) and text[-1].lower() in 'aeiou'\n"
-            )
-        if function_name == "safe_divide":
-            return (
-                f"def {function_name}{signature}:\n"
-                "    return None if b == 0 else a / b\n"
-            )
-        if function_name == "sign":
-            return (
-                f"def {function_name}{signature}:\n"
-                "    if x > 0:\n"
-                "        return 1\n"
-                "    if x < 0:\n"
-                "        return -1\n"
-                "    return 0\n"
-            )
-        if function_name == "absolute":
-            return (
-                f"def {function_name}{signature}:\n"
-                "    return abs(x)\n"
-            )
-        if function_name == "modulo_abs":
-            return (
-                f"def {function_name}{signature}:\n"
-                "    return abs(a) % b\n"
-            )
-        if function_name == "repeat_string":
-            return (
-                f"def {function_name}{signature}:\n"
-                "    return text * n\n"
-            )
-        if function_name == "join_with_comma":
-            return (
-                f"def {function_name}{signature}:\n"
-                "    return ','.join(values)\n"
-            )
-        if function_name == "nth_char":
-            return (
-                f"def {function_name}{signature}:\n"
-                "    return text[n] if 0 <= n < len(text) else ''\n"
-            )
-        if function_name == "first_last":
-            return (
-                f"def {function_name}{signature}:\n"
-                "    if not text:\n"
-                "        return ('', '')\n"
-                "    return (text[0], text[-1])\n"
-            )
-        if function_name == "sum_of_squares":
-            return (
-                f"def {function_name}{signature}:\n"
-                "    return sum(v * v for v in values)\n"
-            )
-        if function_name == "sum_range":
-            return (
-                f"def {function_name}{signature}:\n"
-                "    if start > end:\n"
-                "        return 0\n"
-                "    return sum(range(start, end + 1))\n"
-            )
-        if function_name == "range_list":
-            return (
-                f"def {function_name}{signature}:\n"
-                "    if start > end:\n"
-                "        return []\n"
-                "    return list(range(start, end + 1))\n"
-            )
-        if function_name == "contains_value":
-            return (
-                f"def {function_name}{signature}:\n"
-                "    return value in values\n"
-            )
-        if function_name == "index_of":
-            return (
-                f"def {function_name}{signature}:\n"
-                "    return values.index(value) if value in values else -1\n"
-            )
-        if function_name == "replace_spaces":
-            return (
-                f"def {function_name}{signature}:\n"
-                "    return text.replace(' ', '_')\n"
-            )
-        if function_name == "count_true":
-            return (
-                f"def {function_name}{signature}:\n"
-                "    return sum(1 for v in values if v)\n"
-            )
-        if function_name == "all_positive":
-            return (
-                f"def {function_name}{signature}:\n"
-                "    return all(v > 0 for v in values)\n"
-            )
-        if function_name == "any_negative":
-            return (
-                f"def {function_name}{signature}:\n"
-                "    return any(v < 0 for v in values)\n"
-            )
-        if function_name == "clamp_list":
-            return (
-                f"def {function_name}{signature}:\n"
-                "    return [max(low, min(high, v)) for v in values]\n"
+                "    return [a + b for a, b in zip(values[::2], values[1::2])]\n"
             )
         if function_name == "rotate_left":
             return (
                 f"def {function_name}{signature}:\n"
-                "    return values[1:] + values[:1] if values else []\n"
+                "    if not values:\n"
+                "        return []\n"
+                "    return values[1:] + values[:1]\n"
             )
-        if function_name == "rotate_right":
+        if function_name == "is_palindrome_alnum":
             return (
                 f"def {function_name}{signature}:\n"
-                "    return values[-1:] + values[:-1] if values else []\n"
+                "    filtered = ''.join(ch.lower() for ch in text if ch.isalnum())\n"
+                "    return filtered == filtered[::-1]\n"
             )
-        if function_name == "triangle_area":
+        if function_name == "two_sum_indices":
             return (
                 f"def {function_name}{signature}:\n"
-                "    return base * height / 2\n"
+                "    for i in range(len(nums)):\n"
+                "        for j in range(i + 1, len(nums)):\n"
+                "            if nums[i] + nums[j] == target:\n"
+                "                return (i, j)\n"
+                "    return (-1, -1)\n"
             )
-        if function_name == "rectangle_area":
+        if function_name == "dedupe_preserve":
             return (
                 f"def {function_name}{signature}:\n"
-                "    return width * height\n"
+                "    seen = set()\n"
+                "    result = []\n"
+                "    for item in values:\n"
+                "        if item in seen:\n"
+                "            continue\n"
+                "        seen.add(item)\n"
+                "        result.append(item)\n"
+                "    return result\n"
             )
-        if function_name == "circle_area":
+        if function_name == "parse_int_list":
             return (
                 f"def {function_name}{signature}:\n"
-                "    return 3.141592653589793 * r * r\n"
+                "    if not text.strip():\n"
+                "        return []\n"
+                "    normalized = text.replace(',', ' ')\n"
+                "    parts = [p for p in normalized.split() if p]\n"
+                "    return [int(p) for p in parts]\n"
             )
-        if function_name == "celsius_to_f":
+        if function_name == "max_subarray_sum":
             return (
                 f"def {function_name}{signature}:\n"
-                "    return (c * 9 / 5) + 32\n"
+                "    if not values:\n"
+                "        return 0\n"
+                "    best = None\n"
+                "    for i in range(len(values)):\n"
+                "        total = 0\n"
+                "        for j in range(i, len(values)):\n"
+                "            total += values[j]\n"
+                "            if best is None or total > best:\n"
+                "                best = total\n"
+                "    return best if best is not None else 0\n"
             )
-        if function_name == "f_to_c":
+        if function_name == "bfs_distance":
             return (
                 f"def {function_name}{signature}:\n"
-                "    return (f - 32) * 5 / 9\n"
+                "    from collections import deque\n"
+                "    if start == goal:\n"
+                "        return 0\n"
+                "    visited = {start}\n"
+                "    queue = deque([(start, 0)])\n"
+                "    while queue:\n"
+                "        node, dist = queue.popleft()\n"
+                "        for neighbor in graph.get(node, []):\n"
+                "            if neighbor in visited:\n"
+                "                continue\n"
+                "            if neighbor == goal:\n"
+                "                return dist + 1\n"
+                "            visited.add(neighbor)\n"
+                "            queue.append((neighbor, dist + 1))\n"
+                "    return -1\n"
             )
-        if function_name == "km_to_miles":
-            return (
-                f"def {function_name}{signature}:\n"
-                "    return km * 0.621371\n"
-            )
-        if function_name == "miles_to_km":
-            return (
-                f"def {function_name}{signature}:\n"
-                "    return miles * 1.60934\n"
-            )
-        if function_name == "count_digits":
-            return (
-                f"def {function_name}{signature}:\n"
-                "    return len(str(abs(n)))\n"
-            )
-
         return None
-
-    @staticmethod
-    def _extract_def_name(code: str) -> str | None:
-        match = re.search(r"def\s+(\w+)\(", code)
-        if match:
-            return match.group(1)
-        return None
-
-    @staticmethod
-    def _has_learned_signal(prompt: str) -> bool:
-        hints = (
-            "normalize case and remove non-alphanumeric",
-            "vowel counting",
-            "iterative accumulation",
-            "factorial can be computed",
-            "trial division",
-            "median can be found",
-            "mode can be computed",
-            "preserve order by tracking seen",
-            "use python built-ins like sum(values)",
-            "use slicing [::-1] or reversed()",
-        )
-        lowered = prompt.lower()
-        return "memory context" in lowered and any(hint in lowered for hint in hints)
 
     @staticmethod
     def _extract_function_name(prompt: str) -> str:
         match = re.search(r"Function Name:\s*(\w+)", prompt)
-        if match:
-            return match.group(1)
-        match = re.search(r"def (\w+)\(", prompt)
-        if match:
-            return match.group(1)
-        return "solution"
+        return match.group(1) if match else "solution"
 
     @staticmethod
     def _extract_signature(prompt: str) -> str:
-        match = re.search(r"Signature:\s*(\(.*\))", prompt)
-        if match:
-            return match.group(1)
-        match = re.search(r"def \w+(\(.*\))", prompt)
-        if match:
-            return match.group(1)
-        return "()"
+        match = re.search(r"Signature:\s*(\([^\)]*\))", prompt)
+        return match.group(1) if match else "()"
+
+    @staticmethod
+    def _extract_example_code(prompt: str) -> str | None:
+        match = re.search(r"EXAMPLE_CODE_START\n(.*?)\nEXAMPLE_CODE_END", prompt, re.DOTALL)
+        return match.group(1).strip() if match else None
+
+    @staticmethod
+    def _extract_memory_context_code(prompt: str) -> str | None:
+        match = re.search(r"Memory Context:\n(.*)", prompt, re.DOTALL)
+        if not match:
+            return None
+        lines = match.group(1).splitlines()
+        for line in lines:
+            if line.strip().startswith("def "):
+                return line + "\n" + "\n".join(lines[lines.index(line) + 1 :])
+        return None
+
+    @staticmethod
+    def _extract_def_name(code: str) -> str | None:
+        match = re.search(r"def\s+(\w+)\s*\(", code)
+        return match.group(1) if match else None
 
     @staticmethod
     def _parse_const_suffix(function_name: str) -> int:
         suffix = function_name.split("_")[-1]
-        if suffix.startswith("neg") and suffix[3:].isdigit():
-            return -int(suffix[3:])
+        if suffix.startswith("neg"):
+            return -int(suffix.replace("neg", ""))
         return int(suffix)
 
     @staticmethod
-    def _extract_example_code(prompt: str) -> str | None:
-        marker = "EXAMPLE_CODE_START"
-        if marker not in prompt:
-            return None
-        chunks = prompt.split(marker, 1)[1]
-        end_marker = "EXAMPLE_CODE_END"
-        if end_marker in chunks:
-            code = chunks.split(end_marker, 1)[0]
-        else:
-            code = chunks
-        code = code.strip()
-        if not code.startswith("def"):
-            return None
-        return code + "\n"
-
-    @staticmethod
-    def _extract_memory_context_code(prompt: str) -> str | None:
-        if "Memory Context:" not in prompt:
-            return None
-        snippet = prompt.split("Memory Context:", 1)[1]
-        match = re.search(r"(def[\s\S]+)", snippet)
-        if not match:
-            return None
-        code = match.group(1)
-        for stopper in ("\n- [", "\nEXAMPLE_CODE_START"):
-            if stopper in code:
-                code = code.split(stopper, 1)[0]
-        code = code.strip()
-        if not code.startswith("def"):
-            return None
-        return code + "\n"
+    def _has_learned_signal(prompt: str) -> bool:
+        return "Memory Context:" in prompt

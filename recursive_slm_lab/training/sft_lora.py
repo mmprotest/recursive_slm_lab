@@ -3,9 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 import importlib.util
 from pathlib import Path
-from typing import Iterable
 
 from ..memory import fetch_passed_episodes, register_adapter
+from ..tasks import load_tasks
+from ..loop.prompts import build_prompt
 
 
 @dataclass
@@ -16,14 +17,34 @@ class TrainingResult:
     message: str
 
 
+def _resolve_target_modules(model) -> list[str]:
+    import torch
+
+    preferred = [
+        "q_proj",
+        "k_proj",
+        "v_proj",
+        "o_proj",
+        "gate_proj",
+        "up_proj",
+        "down_proj",
+    ]
+    module_names = {name.split(".")[-1] for name, module in model.named_modules() if isinstance(module, torch.nn.Linear)}
+    matched = [name for name in preferred if name in module_names]
+    if matched:
+        return matched
+    return sorted(module_names)
+
+
 def train_lora_adapter(conn, out_dir: str, base_model_path: str | None) -> TrainingResult:
     if not base_model_path:
-        return TrainingResult("", out_dir, False, "RSLM_HF_MODEL_PATH is not set.")
+        return TrainingResult("", out_dir, False, "RSLM_HF_MODEL_ID is not set.")
 
     required = ["torch", "datasets", "transformers", "peft"]
     missing = [name for name in required if importlib.util.find_spec(name) is None]
     if missing:
-        return TrainingResult("", out_dir, False, f"Optional deps missing: {', '.join(missing)}")
+        hint = "pip install -e '.[localhf,train]'"
+        return TrainingResult("", out_dir, False, f"Optional deps missing: {', '.join(missing)}. Install {hint}.")
 
     import torch
     from datasets import Dataset
@@ -34,38 +55,96 @@ def train_lora_adapter(conn, out_dir: str, base_model_path: str | None) -> Train
     if not episodes:
         return TrainingResult("", out_dir, False, "No verified episodes to train on.")
 
-    texts = []
-    for ep in episodes:
-        text = f"{ep.prompt}\n\n{ep.candidate_code}"
-        texts.append({"text": text})
+    tasks = {task.task_id: task for task in load_tasks()}
 
-    dataset = Dataset.from_list(texts)
+    examples = []
+    for ep in episodes:
+        task = tasks.get(ep.task_id)
+        if not task:
+            continue
+        prompt = build_prompt(task.prompt, task.function_name, task.signature, None, None)
+        examples.append({"prompt": prompt, "code": ep.candidate_code.strip() + "\n"})
+
+    if not examples:
+        return TrainingResult("", out_dir, False, "No matching tasks found for training data.")
+
+    dataset = Dataset.from_list(examples)
 
     tokenizer = AutoTokenizer.from_pretrained(base_model_path)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    def tokenize(batch: dict) -> dict:
-        tokens = tokenizer(batch["text"], truncation=True, padding="max_length", max_length=256)
-        tokens["labels"] = tokens["input_ids"].copy()
-        return tokens
+    system_prompt = "You are a code generation assistant."
 
-    tokenized = dataset.map(tokenize, batched=True, remove_columns=["text"])
+    def tokenize(batch: dict) -> dict:
+        prompt_text = tokenizer.apply_chat_template(
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": batch["prompt"]},
+            ],
+            tokenize=False,
+            add_generation_prompt=True,
+        )
+        full_text = prompt_text + batch["code"]
+        prompt_tokens = tokenizer(prompt_text, truncation=True, max_length=512, add_special_tokens=False)
+        full_tokens = tokenizer(full_text, truncation=True, max_length=512, add_special_tokens=False)
+        input_ids = full_tokens["input_ids"]
+        labels = input_ids.copy()
+        prompt_len = len(prompt_tokens["input_ids"])
+        labels[:prompt_len] = [-100] * prompt_len
+        return {
+            "input_ids": input_ids,
+            "attention_mask": full_tokens["attention_mask"],
+            "labels": labels,
+        }
+
+    tokenized = dataset.map(tokenize, remove_columns=["prompt", "code"])
 
     model = AutoModelForCausalLM.from_pretrained(base_model_path)
-    lora_config = LoraConfig(r=8, lora_alpha=16, lora_dropout=0.1, target_modules=["q_proj", "v_proj"])
+    if torch.cuda.is_available():
+        model.gradient_checkpointing_enable()
+
+    target_modules = _resolve_target_modules(model)
+    lora_config = LoraConfig(
+        r=16,
+        lora_alpha=32,
+        lora_dropout=0.05,
+        target_modules=target_modules,
+        bias="none",
+        task_type="CAUSAL_LM",
+    )
     model = get_peft_model(model, lora_config)
+
+    def collate(features: list[dict]) -> dict:
+        batch = tokenizer.pad(
+            {"input_ids": [f["input_ids"] for f in features], "attention_mask": [f["attention_mask"] for f in features]},
+            padding=True,
+            return_tensors="pt",
+        )
+        max_len = batch["input_ids"].shape[1]
+        labels = []
+        for feature in features:
+            label = feature["labels"]
+            pad_len = max_len - len(label)
+            labels.append(label + [-100] * pad_len)
+        batch["labels"] = torch.tensor(labels)
+        return batch
 
     training_args = TrainingArguments(
         output_dir=out_dir,
-        per_device_train_batch_size=2,
+        per_device_train_batch_size=1,
+        gradient_accumulation_steps=8,
         num_train_epochs=1,
+        max_steps=200,
+        learning_rate=2e-4,
         logging_steps=5,
         save_strategy="no",
-        fp16=torch.cuda.is_available(),
+        fp16=torch.cuda.is_available() and not torch.cuda.is_bf16_supported(),
+        bf16=torch.cuda.is_available() and torch.cuda.is_bf16_supported(),
+        report_to=[],
     )
 
-    trainer = Trainer(model=model, args=training_args, train_dataset=tokenized)
+    trainer = Trainer(model=model, args=training_args, train_dataset=tokenized, data_collator=collate)
     trainer.train()
 
     adapter_path = Path(out_dir)

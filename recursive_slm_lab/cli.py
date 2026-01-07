@@ -2,13 +2,21 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Optional
+import random
 
 import typer
 from rich import print
 
 from .config import Config
 from .llm import MockBackend, OpenAICompatBackend, LocalHFBackend
-from .memory import init_db, connect, consolidate, get_active_adapter
+from .memory import (
+    init_db,
+    connect,
+    consolidate,
+    get_active_adapter,
+    fetch_seen_task_ids,
+    wipe_memory,
+)
 from .tasks import load_tasks, validate_tasks, split_tasks
 from .loop import run_iteration
 from .eval import evaluate_conditions, plot_results
@@ -32,9 +40,41 @@ def _resolve_backend(config: Config) -> object:
             adapter = active[1]
         conn.close()
         if not config.hf_model_path:
-            raise typer.BadParameter("RSLM_HF_MODEL_PATH is required for localhf backend")
-        return LocalHFBackend(config.hf_model_path, adapter_path=adapter)
+            raise typer.BadParameter("RSLM_HF_MODEL_ID is required for localhf backend")
+        try:
+            return LocalHFBackend(
+                config.hf_model_path,
+                adapter_path=adapter,
+                torch_dtype=config.torch_dtype,
+            )
+        except RuntimeError as exc:
+            print(f"[red]{exc}[/red]")
+            raise typer.Exit(code=1)
     return MockBackend()
+
+
+def _select_unseen_tasks(
+    conn,
+    tasks,
+    task_limit: Optional[int],
+    unseen_only: bool,
+    seed: int,
+) -> list:
+    if not unseen_only:
+        return tasks[:task_limit] if task_limit is not None else tasks
+    seen_ids = fetch_seen_task_ids(conn)
+    unseen = [task for task in tasks if task.task_id not in seen_ids]
+    rng = random.Random(seed)
+    rng.shuffle(unseen)
+    if task_limit is None:
+        return unseen
+    if len(unseen) >= task_limit:
+        return unseen[:task_limit]
+    print("[yellow]Warning: ran out of unseen tasks, wrapping around.[/yellow]")
+    remaining = [task for task in tasks if task.task_id in seen_ids]
+    rng.shuffle(remaining)
+    needed = task_limit - len(unseen)
+    return unseen + remaining[:needed]
 
 
 @app.command("init-db")
@@ -73,11 +113,15 @@ def cli_run_iteration(
     model: Optional[str] = typer.Option(None, help="Model name"),
     temperature: float = typer.Option(0.2, help="Sampling temperature"),
     max_tokens: int = typer.Option(256, help="Max tokens"),
+    top_p: float = typer.Option(0.9, help="Top-p nucleus sampling"),
+    top_k: int = typer.Option(50, help="Top-k sampling"),
     memory_enabled: bool = typer.Option(
         False, "--memory-enabled/--no-memory", help="Enable memory retrieval"
     ),
     heldout_size: int = typer.Option(40, help="Heldout size for splitting"),
     task_limit: Optional[int] = typer.Option(None, help="Limit number of tasks"),
+    unseen_only: bool = typer.Option(True, help="Use only unseen train tasks"),
+    train_seed: int = typer.Option(1337, help="Shuffle seed for train selection"),
 ) -> None:
     config = Config(
         db_path=db,
@@ -86,15 +130,20 @@ def cli_run_iteration(
         model=model or Config().model,
         max_tokens=max_tokens,
         temperature=temperature,
+        top_p=top_p,
+        top_k=top_k,
     )
 
     all_tasks = load_tasks()
     train_pool, heldout = split_tasks(all_tasks, heldout_size=heldout_size)
     selected = train_pool if mode == "trainpool" else heldout
-    if task_limit is not None:
-        selected = selected[:task_limit]
 
     conn = connect(db)
+    if mode == "trainpool":
+        selected = _select_unseen_tasks(conn, selected, task_limit, unseen_only, train_seed)
+    elif task_limit is not None:
+        selected = selected[:task_limit]
+
     backend_impl = _resolve_backend(config)
     results = run_iteration(
         conn,
@@ -103,6 +152,8 @@ def cli_run_iteration(
         k=k,
         max_tokens=max_tokens,
         temperature=temperature,
+        top_p=top_p,
+        top_k=top_k,
         memory_enabled=memory_enabled,
         condition=mode,
     )
@@ -133,6 +184,10 @@ def cli_eval(
     heldout_size: int = typer.Option(40, help="Heldout size"),
     task_limit: Optional[int] = typer.Option(None, help="Limit number of heldout tasks"),
     output: Optional[str] = typer.Option(None, help="Optional output JSON"),
+    max_tokens: int = typer.Option(256, help="Max tokens"),
+    temperature: float = typer.Option(0.2, help="Sampling temperature"),
+    top_p: float = typer.Option(0.9, help="Top-p nucleus sampling"),
+    top_k: int = typer.Option(50, help="Top-k sampling"),
 ) -> None:
     if conditions == "all":
         if backend == "mock":
@@ -149,6 +204,10 @@ def cli_eval(
         heldout_size=heldout_size,
         task_limit=task_limit,
         output_path=output,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        top_p=top_p,
+        top_k=top_k,
     )
     if output:
         print(f"Saved results to {output}")
@@ -209,3 +268,11 @@ def cli_rollback_adapter(
     deactivate_adapter(conn, name)
     conn.close()
     print(f"Rolled back adapter {name}")
+
+
+@app.command("wipe-memory")
+def cli_wipe_memory(db: str = typer.Option(..., help="Path to SQLite DB")) -> None:
+    conn = connect(db)
+    wipe_memory(conn)
+    conn.close()
+    print("Wiped memory tables (episodes, failures, rules, procedures).")

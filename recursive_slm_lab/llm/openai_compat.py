@@ -11,7 +11,14 @@ class OpenAICompatBackend(LLMBackend):
     model: str
     api_key: str | None = None
 
-    def generate(self, prompt: str, max_tokens: int, temperature: float) -> LLMResponse:
+    def generate(
+        self,
+        messages: list[dict[str, str]],
+        max_tokens: int,
+        temperature: float,
+        top_p: float,
+        top_k: int,
+    ) -> LLMResponse:
         import httpx
 
         headers = {"Content-Type": "application/json"}
@@ -20,13 +27,13 @@ class OpenAICompatBackend(LLMBackend):
 
         payload = {
             "model": self.model,
-            "messages": [
-                {"role": "system", "content": "You are a code generation assistant."},
-                {"role": "user", "content": prompt},
-            ],
+            "messages": messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
+            "top_p": top_p,
         }
+        if top_k:
+            payload["top_k"] = top_k
         url = self.base_url.rstrip("/") + "/chat/completions"
         with httpx.Client(timeout=60.0) as client:
             response = client.post(url, headers=headers, json=payload)

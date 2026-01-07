@@ -33,17 +33,19 @@ def _make_task(
     function_name: str,
     signature: str,
     reference_tests: str,
-) -> dict[str, str]:
+    assert_tests: list[str],
+) -> dict[str, str | list[str]]:
     return {
         "task_id": _task_id(function_name, prompt),
         "prompt": prompt,
         "function_name": function_name,
         "signature": signature,
         "reference_tests": reference_tests,
+        "assert_tests": assert_tests,
     }
 
 
-def _add_const_task(k: int) -> dict[str, str]:
+def _add_const_task(k: int) -> dict[str, str | list[str]]:
     suffix = f"{k}" if k >= 0 else f"neg{abs(k)}"
     function_name = f"add_const_{suffix}"
     prompt = _format_prompt_add(k)
@@ -67,10 +69,15 @@ def _add_const_task(k: int) -> dict[str, str]:
                 assert {function_name}(n) == n + {k}
         """
     ).strip()
-    return _make_task(prompt, function_name, "(n)", reference_tests)
+    assert_tests = [
+        f"assert {function_name}(0) == {k}",
+        f"assert {function_name}(5) == {5 + k}",
+        f"assert {function_name}(-3) == {-3 + k}",
+    ]
+    return _make_task(prompt, function_name, "(n)", reference_tests, assert_tests)
 
 
-def _mul_const_task(k: int) -> dict[str, str]:
+def _mul_const_task(k: int) -> dict[str, str | list[str]]:
     suffix = f"{k}" if k >= 0 else f"neg{abs(k)}"
     function_name = f"mul_const_{suffix}"
     prompt = _format_prompt_mul(k)
@@ -94,10 +101,15 @@ def _mul_const_task(k: int) -> dict[str, str]:
                 assert {function_name}(n) == n * {k}
         """
     ).strip()
-    return _make_task(prompt, function_name, "(n)", reference_tests)
+    assert_tests = [
+        f"assert {function_name}(1) == {k}",
+        f"assert {function_name}(3) == {3 * k}",
+        f"assert {function_name}(-2) == {-2 * k}",
+    ]
+    return _make_task(prompt, function_name, "(n)", reference_tests, assert_tests)
 
 
-def _rotate_left_task() -> dict[str, str]:
+def _rotate_left_task() -> dict[str, str | list[str]]:
     prompt = "Rotate a list left by one position. Return an empty list for empty input."
     reference_tests = textwrap.dedent(
         """
@@ -125,10 +137,14 @@ def _rotate_left_task() -> dict[str, str]:
                 assert rotate_left(values) == rotate_left_oracle(values)
         """
     ).strip()
-    return _make_task(prompt, "rotate_left", "(values)", reference_tests)
+    assert_tests = [
+        "assert rotate_left([1, 2, 3]) == [2, 3, 1]",
+        "assert rotate_left([]) == []",
+    ]
+    return _make_task(prompt, "rotate_left", "(values)", reference_tests, assert_tests)
 
 
-def _is_palindrome_alnum_task() -> dict[str, str]:
+def _is_palindrome_alnum_task() -> dict[str, str | list[str]]:
     prompt = (
         "Return True if text is a palindrome after removing non-alphanumeric characters "
         "and normalizing case."
@@ -160,10 +176,14 @@ def _is_palindrome_alnum_task() -> dict[str, str]:
                 assert is_palindrome_alnum(text) == oracle(text)
         """
     ).strip()
-    return _make_task(prompt, "is_palindrome_alnum", "(text)", reference_tests)
+    assert_tests = [
+        "assert is_palindrome_alnum('A man, a plan, a canal, Panama!') is True",
+        "assert is_palindrome_alnum('Hello') is False",
+    ]
+    return _make_task(prompt, "is_palindrome_alnum", "(text)", reference_tests, assert_tests)
 
 
-def _two_sum_indices_task() -> dict[str, str]:
+def _two_sum_indices_task() -> dict[str, str | list[str]]:
     prompt = (
         "Given a list of integers and a target, return indices (i, j) with i < j such "
         "that nums[i] + nums[j] == target. Return (-1, -1) if no pair exists."
@@ -211,10 +231,14 @@ def _two_sum_indices_task() -> dict[str, str]:
                 check_solution(nums, target, result)
         """
     ).strip()
-    return _make_task(prompt, "two_sum_indices", "(nums, target)", reference_tests)
+    assert_tests = [
+        "assert two_sum_indices([2, 7, 11, 15], 9) == (0, 1)",
+        "assert two_sum_indices([1, 2, 3], 99) == (-1, -1)",
+    ]
+    return _make_task(prompt, "two_sum_indices", "(nums, target)", reference_tests, assert_tests)
 
 
-def _clamp_task() -> dict[str, str]:
+def _clamp_task() -> dict[str, str | list[str]]:
     prompt = "Clamp x to the inclusive range [lo, hi]."
     reference_tests = textwrap.dedent(
         """
@@ -238,10 +262,15 @@ def _clamp_task() -> dict[str, str]:
                 assert clamp(x, lo, hi) == min(max(x, lo), hi)
         """
     ).strip()
-    return _make_task(prompt, "clamp", "(x, lo, hi)", reference_tests)
+    assert_tests = [
+        "assert clamp(5, 0, 3) == 3",
+        "assert clamp(-1, 0, 3) == 0",
+        "assert clamp(2, 0, 3) == 2",
+    ]
+    return _make_task(prompt, "clamp", "(x, lo, hi)", reference_tests, assert_tests)
 
 
-def _dedupe_preserve_task() -> dict[str, str]:
+def _dedupe_preserve_task() -> dict[str, str | list[str]]:
     prompt = "Remove duplicate items from a list while preserving the first occurrence order."
     reference_tests = textwrap.dedent(
         """
@@ -274,10 +303,14 @@ def _dedupe_preserve_task() -> dict[str, str]:
                 assert dedupe_preserve(values) == oracle(values)
         """
     ).strip()
-    return _make_task(prompt, "dedupe_preserve", "(values)", reference_tests)
+    assert_tests = [
+        "assert dedupe_preserve([1, 2, 1, 3, 2]) == [1, 2, 3]",
+        "assert dedupe_preserve([]) == []",
+    ]
+    return _make_task(prompt, "dedupe_preserve", "(values)", reference_tests, assert_tests)
 
 
-def _parse_int_list_task() -> dict[str, str]:
+def _parse_int_list_task() -> dict[str, str | list[str]]:
     prompt = (
         "Parse a string of integers separated by commas and/or whitespace. "
         "Return an empty list for empty or whitespace-only input."
@@ -318,10 +351,15 @@ def _parse_int_list_task() -> dict[str, str]:
                 assert parse_int_list(text) == oracle(text)
         """
     ).strip()
-    return _make_task(prompt, "parse_int_list", "(text)", reference_tests)
+    assert_tests = [
+        "assert parse_int_list('1, 2,3') == [1, 2, 3]",
+        "assert parse_int_list('  -1  4   5 ') == [-1, 4, 5]",
+        "assert parse_int_list('') == []",
+    ]
+    return _make_task(prompt, "parse_int_list", "(text)", reference_tests, assert_tests)
 
 
-def _max_subarray_sum_task() -> dict[str, str]:
+def _max_subarray_sum_task() -> dict[str, str | list[str]]:
     prompt = "Return the maximum sum over all contiguous subarrays. Return 0 for an empty list."
     reference_tests = textwrap.dedent(
         """
@@ -357,10 +395,15 @@ def _max_subarray_sum_task() -> dict[str, str]:
                 assert max_subarray_sum(values) == oracle(values)
         """
     ).strip()
-    return _make_task(prompt, "max_subarray_sum", "(values)", reference_tests)
+    assert_tests = [
+        "assert max_subarray_sum([1, -2, 3, 4]) == 7",
+        "assert max_subarray_sum([-5, -1, -3]) == -1",
+        "assert max_subarray_sum([]) == 0",
+    ]
+    return _make_task(prompt, "max_subarray_sum", "(values)", reference_tests, assert_tests)
 
 
-def _bfs_distance_task() -> dict[str, str]:
+def _bfs_distance_task() -> dict[str, str | list[str]]:
     prompt = (
         "Given an unweighted graph as an adjacency list, return the shortest path length "
         "from start to goal using BFS. Return -1 if goal is unreachable."
@@ -412,7 +455,12 @@ def _bfs_distance_task() -> dict[str, str]:
                 assert bfs_distance(graph, start, goal) == oracle(graph, start, goal)
         """
     ).strip()
-    return _make_task(prompt, "bfs_distance", "(graph, start, goal)", reference_tests)
+    assert_tests = [
+        "assert bfs_distance({0: [1, 2], 1: [2], 2: [3], 3: []}, 0, 3) == 2",
+        "assert bfs_distance({0: [1, 2], 1: [2], 2: [3], 3: []}, 3, 0) == -1",
+        "assert bfs_distance({0: [1], 1: []}, 0, 0) == 0",
+    ]
+    return _make_task(prompt, "bfs_distance", "(graph, start, goal)", reference_tests, assert_tests)
 
 
 def _interleave_range(start: int, stop: int) -> list[int]:
@@ -423,10 +471,7 @@ def _interleave_range(start: int, stop: int) -> list[int]:
     return values
 
 
-def generate_tasks(count: int) -> list[dict[str, str]]:
-    if count < 120:
-        raise ValueError("count must be at least 120")
-
+def generate_tasks(count: int) -> list[dict[str, str | list[str]]]:
     core_tasks = [
         _rotate_left_task(),
         _is_palindrome_alnum_task(),
@@ -458,7 +503,7 @@ def generate_tasks(count: int) -> list[dict[str, str]]:
     return tasks[:count]
 
 
-def write_tasks(tasks: list[dict[str, str]], output_path: Path) -> None:
+def write_tasks(tasks: list[dict[str, str | list[str]]], output_path: Path) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", encoding="utf-8") as handle:
         for task in tasks:
