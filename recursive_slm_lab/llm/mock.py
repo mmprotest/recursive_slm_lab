@@ -51,10 +51,10 @@ class MockBackend(LLMBackend):
 
     def _adapt_example(self, example_code: str, function_name: str, signature: str, prompt: str) -> str | None:
         if "add_const" in function_name and re.search(r"return\s+n\s*\+\s*\d+", example_code):
-            value = int(function_name.split("_")[-1])
+            value = self._parse_const_suffix(function_name)
             return f"def {function_name}{signature}:\n    return n + {value}\n"
         if "mul_const" in function_name and re.search(r"return\s+n\s*\*\s*\d+", example_code):
-            value = int(function_name.split("_")[-1])
+            value = self._parse_const_suffix(function_name)
             return f"def {function_name}{signature}:\n    return n * {value}\n"
         if "is_divisible_by" in function_name and re.search(r"return\s+n\s*%\s*\d+\s*==\s*0", example_code):
             value = int(function_name.split("_")[-1])
@@ -78,10 +78,10 @@ class MockBackend(LLMBackend):
 
     def _synthesize_solution(self, function_name: str, signature: str, prompt: str) -> str | None:
         if "add_const" in function_name:
-            value = int(function_name.split("_")[-1])
+            value = self._parse_const_suffix(function_name)
             return f"def {function_name}{signature}:\n    return n + {value}\n"
         if "mul_const" in function_name:
-            value = int(function_name.split("_")[-1])
+            value = self._parse_const_suffix(function_name)
             return f"def {function_name}{signature}:\n    return n * {value}\n"
         if "is_divisible_by" in function_name:
             value = int(function_name.split("_")[-1])
@@ -476,6 +476,13 @@ class MockBackend(LLMBackend):
         if match:
             return match.group(1)
         return "()"
+
+    @staticmethod
+    def _parse_const_suffix(function_name: str) -> int:
+        suffix = function_name.split("_")[-1]
+        if suffix.startswith("neg") and suffix[3:].isdigit():
+            return -int(suffix[3:])
+        return int(suffix)
 
     @staticmethod
     def _extract_example_code(prompt: str) -> str | None:

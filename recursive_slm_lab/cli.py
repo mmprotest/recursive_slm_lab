@@ -44,10 +44,22 @@ def cli_init_db(db: str = typer.Option(..., help="Path to SQLite DB")) -> None:
 
 
 @app.command("seed-tasks")
-def cli_seed_tasks() -> None:
-    tasks = load_tasks()
+def cli_seed_tasks(
+    regen: bool = typer.Option(False, help="Regenerate the bundled tasks"),
+    count: int = typer.Option(200, help="Number of tasks to generate"),
+    out: Optional[Path] = typer.Option(None, help="Optional output path for JSONL"),
+) -> None:
+    if count < 120:
+        raise typer.BadParameter("--count must be at least 120")
+    output_path = out or (Path(__file__).parent / "tasks" / "bundled_tasks.jsonl")
+    if regen or not output_path.exists():
+        from .tasks.generator import generate_tasks, write_tasks
+
+        tasks_payload = generate_tasks(count)
+        write_tasks(tasks_payload, output_path)
+    tasks = load_tasks(output_path)
     validate_tasks(tasks)
-    print(f"Seeded and validated {len(tasks)} tasks at {Path(__file__).parent / 'tasks' / 'bundled_tasks.jsonl'}")
+    print(f"Seeded and validated {len(tasks)} tasks at {output_path}")
 
 
 @app.command("run-iteration")
