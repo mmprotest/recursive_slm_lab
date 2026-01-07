@@ -48,6 +48,13 @@ Notes:
 - The first run will download model weights from Hugging Face.
 - Qwen3 thinking output is stripped by removing the first `</think>` block and extracting the first python code fence.
 
+RTX 50-series (sm_120) requires PyTorch nightly cu128/cu129. Example:
+
+```bash
+pip uninstall -y torch torchvision torchaudio
+pip install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu129
+```
+
 Quick smoke command (no training):
 
 ```bash

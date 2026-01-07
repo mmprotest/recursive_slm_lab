@@ -95,6 +95,7 @@ def evaluate_conditions(
             effective_condition = "baseline"
         if learning_enabled and backend_label == "localhf" and not active_adapter:
             notes = "Learning requested but no active adapter is set; using base model."
+            learned_unavailable = True
 
         outcomes: list[list[bool]] = []
         for task in heldout:

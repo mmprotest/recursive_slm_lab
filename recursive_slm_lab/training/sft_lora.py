@@ -43,8 +43,8 @@ def train_lora_adapter(conn, out_dir: str, base_model_path: str | None) -> Train
     required = ["torch", "datasets", "transformers", "peft"]
     missing = [name for name in required if importlib.util.find_spec(name) is None]
     if missing:
-        hint = "pip install -e '.[localhf,train]'"
-        return TrainingResult("", out_dir, False, f"Optional deps missing: {', '.join(missing)}. Install {hint}.")
+        message = "Optional deps missing: datasets/peft/etc. Install: pip install -e '.[localhf,train]'"
+        return TrainingResult("", out_dir, False, message)
 
     import torch
     from datasets import Dataset

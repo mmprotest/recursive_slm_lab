@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import importlib.util
+import logging
 import re
 
 from packaging import version
@@ -9,6 +10,7 @@ from packaging import version
 from .base import LLMBackend, LLMResponse
 
 MIN_TRANSFORMERS_VERSION = "4.51.0"
+LOGGER = logging.getLogger(__name__)
 
 
 def _strip_think(text: str) -> str:
@@ -102,6 +104,14 @@ class LocalHFBackend(LLMBackend):
             self._tokenizer.pad_token = self._tokenizer.eos_token
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
+        if device == "cuda":
+            try:
+                torch.randn(1, device="cuda")
+            except Exception:
+                LOGGER.warning(
+                    "CUDA present but kernels not supported (likely sm_120). Falling back to CPU."
+                )
+                device = "cpu"
         dtype = self._resolve_dtype(device)
         device_map: str | None = "auto" if device == "cuda" else None
 

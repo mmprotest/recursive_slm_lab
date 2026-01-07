@@ -120,7 +120,11 @@ def cli_run_iteration(
     ),
     heldout_size: int = typer.Option(40, help="Heldout size for splitting"),
     task_limit: Optional[int] = typer.Option(None, help="Limit number of tasks"),
-    unseen_only: bool = typer.Option(True, help="Use only unseen train tasks"),
+    unseen_only: bool = typer.Option(
+        True,
+        "--unseen-only/--no-unseen-only",
+        help="Select unseen train tasks only.",
+    ),
     train_seed: int = typer.Option(1337, help="Shuffle seed for train selection"),
 ) -> None:
     config = Config(
@@ -236,6 +240,7 @@ def cli_train_lora(
         print(f"Adapter saved at {result.adapter_path}")
     else:
         print(result.message)
+        raise typer.Exit(code=1)
 
 
 @app.command("list-adapters")
