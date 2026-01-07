@@ -170,9 +170,7 @@ def cli_run_iteration(
 def cli_consolidate(
     db: str = typer.Option(..., help="Path to SQLite DB"),
     min_evidence: int = typer.Option(3, help="Minimum evidence count"),
-    backend: str = typer.Option("mock", help="mock|openai"),
 ) -> None:
-    _ = backend
     conn = connect(db)
     consolidate(conn, min_evidence=min_evidence)
     conn.close()

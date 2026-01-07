@@ -16,7 +16,7 @@ rslm seed-tasks
   $Iter = $_.ToString("000")
   $ResultsIter = "$Artifacts/results_iter$Iter.json"
   rslm run-iteration --db $Db --tasks bundled --k 4 --mode trainpool --backend mock --memory-enabled --heldout-size 20 --task-limit 30
-  rslm consolidate --db $Db --min-evidence 1 --backend mock
+  rslm consolidate --db $Db --min-evidence 1
   rslm eval --db $Db --backend mock --conditions all --k 1 --heldout-size 20 --task-limit 20 --output $ResultsIter
 }
 

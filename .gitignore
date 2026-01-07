@@ -7,3 +7,25 @@ env/
 __pycache__/
 *.py[cod]
 *$py.class
+
+# Packaging/build artifacts
+build/
+dist/
+*.egg-info/
+
+# Test/lint caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Local artifacts/data
+artifacts/
+artifacts_real/
+*.sqlite
+*.sqlite3
+*.db
+*-wal
+*-shm
+
+# OS files
+.DS_Store

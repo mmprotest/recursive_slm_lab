@@ -30,7 +30,7 @@ foreach ($i in 1..5) {
     --max-tokens 512 --temperature 0.2 --top-p 0.9 --top-k 50
   if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-  rslm consolidate --db $Db --min-evidence 1 --backend localhf
+  rslm consolidate --db $Db --min-evidence 1
   if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
   rslm train-lora --db $Db --out $adapterDir
   $trainExit = $LASTEXITCODE

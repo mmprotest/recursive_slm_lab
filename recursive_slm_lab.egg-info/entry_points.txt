@@ -1,2 +1,0 @@
-[console_scripts]
-rslm = recursive_slm_lab.cli:app

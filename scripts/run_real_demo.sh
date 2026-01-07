@@ -21,12 +21,19 @@ for i in 1 2 3 4 5; do
   ADAPTER_DIR=$ARTIFACTS/adapters/iter${ITER}
 
   rslm run-iteration --db "$DB" --tasks bundled --k 2 --mode trainpool --backend localhf \
-    --memory-enabled --heldout-size 40 --task-limit 25 --unseen-only true --train-seed 1337 \
+    --memory-enabled --heldout-size 40 --task-limit 25 --unseen-only --train-seed 1337 \
     --max-tokens 512 --temperature 0.2 --top-p 0.9 --top-k 50
 
-  rslm consolidate --db "$DB" --min-evidence 1 --backend localhf
+  rslm consolidate --db "$DB" --min-evidence 1
+  set +e
   rslm train-lora --db "$DB" --out "$ADAPTER_DIR"
-  rslm set-active-adapter --db "$DB" --name "iter${ITER}"
+  TRAIN_STATUS=$?
+  set -e
+  if [ "$TRAIN_STATUS" -ne 0 ]; then
+    echo "Warning: train-lora failed (exit $TRAIN_STATUS). Continuing without learning for iter${ITER}." >&2
+  else
+    rslm set-active-adapter --db "$DB" --name "iter${ITER}"
+  fi
 
   rslm eval --db "$DB" --backend localhf --conditions baseline,memory,learning,memory_learning \
     --k 1 --heldout-size 40 --task-limit 40 --output "$RESULTS_ITER" \

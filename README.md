@@ -94,7 +94,7 @@ Adapters cannot be applied in this mode, so the "learned" condition is unavailab
 rslm init-db --db artifacts/memory.sqlite
 rslm seed-tasks
 rslm run-iteration --db artifacts/memory.sqlite --tasks bundled --k 4 --mode trainpool --backend mock --memory-enabled --heldout-size 20 --task-limit 30
-rslm consolidate --db artifacts/memory.sqlite --min-evidence 1 --backend mock
+rslm consolidate --db artifacts/memory.sqlite --min-evidence 1
 rslm eval --db artifacts/memory.sqlite --backend mock --conditions all --k 1 --heldout-size 20 --task-limit 20 --output artifacts/results_iter001.json
 rslm plot --input artifacts/memory.sqlite --output artifacts/results.png
 ```
