@@ -31,6 +31,11 @@ for i in 1 2 3 4 5; do
   set -e
   if [ "$TRAIN_STATUS" -ne 0 ]; then
     echo "Warning: train-lora failed (exit $TRAIN_STATUS). Continuing without learning for iter${ITER}." >&2
+    ACTIVE_ADAPTER=$(rslm list-adapters --db "$DB" | sed -n 's/^\([^:]*\):.*(active)$/\1/p' | head -n 1)
+    if [ -n "$ACTIVE_ADAPTER" ]; then
+      echo "Warning: Deactivating active adapter ${ACTIVE_ADAPTER} because learning is unavailable." >&2
+      rslm rollback-adapter --db "$DB" --name "$ACTIVE_ADAPTER"
+    fi
   else
     rslm set-active-adapter --db "$DB" --name "iter${ITER}"
   fi
