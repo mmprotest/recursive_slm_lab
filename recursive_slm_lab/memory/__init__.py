@@ -1,6 +1,8 @@
 from .db import (
     init_db,
     connect,
+    RunMeta,
+    start_run,
     insert_episode,
     insert_episode_many,
     fetch_passed_episodes,
@@ -15,10 +17,13 @@ from .db import (
 )
 from .retrieval import retrieve_memory, MemoryContext
 from .consolidation import consolidate
+from .llm_consolidation import consolidate_llm
 
 __all__ = [
     "init_db",
     "connect",
+    "RunMeta",
+    "start_run",
     "insert_episode",
     "insert_episode_many",
     "fetch_passed_episodes",
@@ -33,4 +38,5 @@ __all__ = [
     "retrieve_memory",
     "MemoryContext",
     "consolidate",
+    "consolidate_llm",
 ]
