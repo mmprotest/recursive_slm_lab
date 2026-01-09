@@ -15,12 +15,17 @@ from .memory import (
     consolidate,
     consolidate_llm,
     get_active_adapter,
+    list_policies,
+    get_policy,
+    get_active_policy,
+    set_active_policy,
     fetch_seen_task_ids,
     wipe_memory,
 )
 from .tasks import load_tasks, validate_tasks, split_tasks
 from .loop import run_iteration
 from .eval import evaluate_conditions, plot_results
+from .meta import summarize_failures, propose_policy, evaluate_and_maybe_promote_policy
 from .training import (
     train_lora_adapter,
     get_adapters,
@@ -94,13 +99,16 @@ def cli_init_db(db: str = typer.Option(..., help="Path to SQLite DB")) -> None:
 @app.command("seed-tasks")
 def cli_seed_tasks(
     regen: bool = typer.Option(False, help="Regenerate the bundled tasks"),
+    regen_families: bool = typer.Option(
+        False, help="Regenerate tasks using the expanded family generator"
+    ),
     count: int = typer.Option(200, help="Number of tasks to generate"),
     out: Optional[Path] = typer.Option(None, help="Optional output path for JSONL"),
 ) -> None:
     if count < 120:
         raise typer.BadParameter("--count must be at least 120")
     output_path = out or (Path(__file__).parent / "tasks" / "bundled_tasks.jsonl")
-    if regen or not output_path.exists():
+    if regen or regen_families or not output_path.exists():
         from .tasks.generator import generate_tasks, write_tasks
 
         tasks_payload = generate_tasks(count)
@@ -134,6 +142,9 @@ def cli_run_iteration(
         help="Select unseen train tasks only.",
     ),
     train_seed: int = typer.Option(1337, help="Shuffle seed for train selection"),
+    verify_workers: Optional[int] = typer.Option(
+        None, help="Parallel verification workers (defaults to RSLM_VERIFY_WORKERS)"
+    ),
 ) -> None:
     config = Config(
         db_path=db,
@@ -151,6 +162,7 @@ def cli_run_iteration(
     selected = train_pool if mode == "trainpool" else heldout
 
     conn = connect(db)
+    policy = get_active_policy(conn)
     if mode == "trainpool":
         selected = _select_unseen_tasks(conn, selected, task_limit, unseen_only, train_seed)
     elif task_limit is not None:
@@ -168,6 +180,9 @@ def cli_run_iteration(
         top_k=top_k,
         memory_enabled=memory_enabled,
         condition=mode,
+        policy=policy,
+        db_path=db,
+        verify_workers=verify_workers,
     )
     conn.close()
     passed = sum(1 for r in results if r.passed)
@@ -234,6 +249,10 @@ def cli_eval(
     temperature: float = typer.Option(0.2, help="Sampling temperature"),
     top_p: float = typer.Option(0.9, help="Top-p nucleus sampling"),
     top_k: int = typer.Option(50, help="Top-k sampling"),
+    policy_name: Optional[str] = typer.Option(None, help="Evaluate a specific policy by name"),
+    deterministic: bool = typer.Option(True, "--deterministic/--stochastic", help="Deterministic eval"),
+    repeats: int = typer.Option(1, help="Repeat evaluations for stability"),
+    seed: int = typer.Option(1337, help="Seed for deterministic eval"),
 ) -> None:
     if conditions == "all":
         if backend == "mock":
@@ -254,6 +273,10 @@ def cli_eval(
         temperature=temperature,
         top_p=top_p,
         top_k=top_k,
+        policy_name=policy_name,
+        repeats=repeats,
+        deterministic=deterministic,
+        seed=seed,
     )
     if output:
         print(f"Saved results to {output}")
@@ -297,9 +320,12 @@ def cli_train_and_promote(
     max_regression_drop: float = typer.Option(0.0, help="Allowed regression drop"),
     backend: Optional[str] = typer.Option(None, help="Backend (must be localhf)"),
     max_tokens: int = typer.Option(256, help="Max tokens"),
-    temperature: float = typer.Option(0.2, help="Sampling temperature"),
+    temperature: float = typer.Option(0.0, help="Sampling temperature"),
     top_p: float = typer.Option(0.9, help="Top-p nucleus sampling"),
     top_k: int = typer.Option(50, help="Top-k sampling"),
+    deterministic: bool = typer.Option(True, "--deterministic/--stochastic", help="Deterministic gating"),
+    repeats: int = typer.Option(3, help="Repeat evaluations for gating"),
+    seed: int = typer.Option(1337, help="Seed for deterministic gating"),
 ) -> None:
     config = Config(
         db_path=db,
@@ -327,12 +353,113 @@ def cli_train_and_promote(
             top_p=top_p,
             top_k=top_k,
             base_model_path=config.hf_model_path,
+            repeats=repeats,
+            deterministic=deterministic,
+            seed=seed,
         ),
     )
     conn.close()
     print(result.message)
     if not result.promoted and result.decision == "rejected":
         print(result.metrics)
+
+
+@app.command("policy-list")
+def cli_policy_list(db: str = typer.Option(..., help="Path to SQLite DB")) -> None:
+    conn = connect(db)
+    policies = list_policies(conn)
+    conn.close()
+    for name, created_at, parent in policies:
+        parent_label = parent or "none"
+        print(f"{name} (created {created_at}, parent {parent_label})")
+
+
+@app.command("policy-show")
+def cli_policy_show(
+    db: str = typer.Option(..., help="Path to SQLite DB"),
+    name: str = typer.Option(..., help="Policy name"),
+) -> None:
+    conn = connect(db)
+    policy = get_policy(conn, name)
+    conn.close()
+    print(policy.to_json())
+
+
+@app.command("policy-set-active")
+def cli_policy_set_active(
+    db: str = typer.Option(..., help="Path to SQLite DB"),
+    name: str = typer.Option(..., help="Policy name"),
+) -> None:
+    conn = connect(db)
+    set_active_policy(conn, name)
+    conn.close()
+    print(f"Activated policy {name}")
+
+
+@app.command("policy-run-meta-iteration")
+def cli_policy_run_meta_iteration(
+    db: str = typer.Option(..., help="Path to SQLite DB"),
+    backend: str = typer.Option("mock", help="mock|openai|localhf"),
+    model: Optional[str] = typer.Option(None, help="Model name"),
+    base_url: Optional[str] = typer.Option(None, help="OpenAI base URL"),
+    seed: int = typer.Option(1337, help="Seed"),
+    heldout_size: int = typer.Option(40, help="Heldout size for split"),
+    heldout_limit: Optional[int] = typer.Option(None, help="Limit heldout tasks"),
+    regression_size: int = typer.Option(25, help="Regression task count"),
+    regression_seed: int = typer.Option(1337, help="Regression seed"),
+    repeats: int = typer.Option(3, help="Repeat evaluations"),
+    min_delta: float = typer.Option(0.01, help="Minimum heldout improvement"),
+    max_drop: float = typer.Option(0.0, help="Maximum regression drop"),
+    failures: int = typer.Option(50, help="Failure history size to summarize"),
+    deterministic: bool = typer.Option(True, "--deterministic/--stochastic", help="Deterministic gating"),
+) -> None:
+    config = Config(
+        db_path=db,
+        backend=backend,
+        base_url=base_url or Config().base_url,
+        model=model or Config().model,
+    )
+    conn = connect(db)
+    backend_impl = _resolve_backend(config)
+    current_policy = get_active_policy(conn)
+    failure_summary = summarize_failures(conn, limit=failures)
+    constraints = {
+        "retrieval_top_n": "[0, 10]",
+        "temperature": "[0, 1.5]",
+        "k": "[1, 16]",
+        "top_p": "[0.1, 1.0]",
+        "top_k": "[0, 200]",
+    }
+    proposal = propose_policy(
+        backend_impl,
+        current_policy=current_policy,
+        recent_failures_summary=failure_summary,
+        constraints=constraints,
+    )
+    result = evaluate_and_maybe_promote_policy(
+        conn,
+        backend_impl,
+        candidate_policy=proposal.policy,
+        heldout_size=heldout_size,
+        heldout_limit=heldout_limit,
+        regression_size=regression_size,
+        repeats=repeats,
+        seed=seed,
+        regression_seed=regression_seed,
+        deterministic=deterministic,
+        min_delta=min_delta,
+        max_drop=max_drop,
+        notes=failure_summary,
+    )
+    conn.close()
+    print(result.message)
+    print(
+        {
+            "decision": result.decision,
+            "candidate": result.candidate_name,
+            "metrics": result.metrics,
+        }
+    )
 
 
 @app.command("list-adapters")

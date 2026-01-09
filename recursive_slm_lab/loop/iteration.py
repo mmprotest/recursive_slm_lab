@@ -2,11 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+import os
+from concurrent.futures import ProcessPoolExecutor
 
 from ..llm.localhf import LocalHFBackend
 from ..llm.mock import MockBackend
 from ..llm.openai_compat import OpenAICompatBackend
 from ..memory import insert_episode_many, retrieve_memory, mark_task_seen, RunMeta, start_run, get_active_adapter
+from ..policy import DEFAULT_POLICY, Policy
 from ..verify import verify_candidate
 from ..tasks import Task
 from ..llm.base import LLMBackend
@@ -31,7 +34,12 @@ def run_iteration(
     top_k: int,
     memory_enabled: bool,
     condition: str,
+    policy: Policy | None = None,
+    db_path: str | None = None,
+    verify_workers: int | None = None,
 ) -> list[IterationResult]:
+    policy = policy or DEFAULT_POLICY
+    verify_workers = _resolve_verify_workers(verify_workers)
     backend_name = "mock"
     model_name = "unknown"
     if isinstance(backend, MockBackend):
@@ -74,14 +82,19 @@ def run_iteration(
         mark_task_seen(conn, task.task_id)
         memory_context = None
         if memory_enabled:
-            extra_terms = [task.function_name.rsplit("_", 1)[0], task.function_name]
-            memory_context = retrieve_memory(conn, task.prompt, extra_terms=extra_terms)
+            memory_context = retrieve_memory(
+                conn,
+                task.prompt,
+                policy=policy,
+                function_name=task.function_name,
+            )
         candidates = generate_candidates(
             backend,
             task_prompt=task.prompt,
             function_name=task.function_name,
             signature=task.signature,
             memory_context=memory_context,
+            policy=policy,
             k=k,
             max_tokens=max_tokens,
             temperature=temperature,
@@ -97,8 +110,24 @@ def run_iteration(
             memory_sources = ",".join(sources)
             memory_top_score = min(hit.score for hit in memory_context.hits)
         episode_rows: list[tuple] = []
-        for candidate in candidates:
-            verification = verify_candidate(candidate.code, task.reference_tests, task.assert_tests)
+        if verify_workers and verify_workers > 1 and len(candidates) > 1:
+            args_list = [
+                (candidate.code, task.reference_tests, task.assert_tests, db_path)
+                for candidate in candidates
+            ]
+            with ProcessPoolExecutor(max_workers=verify_workers) as executor:
+                results = list(executor.map(_verify_candidate_worker, args_list))
+        else:
+            results = [
+                verify_candidate(
+                    candidate.code,
+                    task.reference_tests,
+                    task.assert_tests,
+                    conn=conn,
+                )
+                for candidate in candidates
+            ]
+        for candidate, verification in zip(candidates, results):
             prompt_hash = hashlib.sha256(candidate.prompt.encode("utf-8")).hexdigest()
             episode_rows.append(
                 (
@@ -120,3 +149,25 @@ def run_iteration(
         insert_episode_many(conn, episode_rows)
         results.append(IterationResult(task_id=task.task_id, passed=passed_any, attempts=len(candidates)))
     return results
+
+
+def _resolve_verify_workers(verify_workers: int | None) -> int:
+    if verify_workers is not None:
+        return max(1, verify_workers)
+    env_value = os.getenv("RSLM_VERIFY_WORKERS")
+    if env_value:
+        try:
+            return max(1, int(env_value))
+        except ValueError:
+            return 1
+    return min(4, os.cpu_count() or 2)
+
+
+def _verify_candidate_worker(args: tuple[str, str, list[str] | None, str | None]):
+    code, reference_tests, assert_tests, db_path = args
+    return verify_candidate(
+        code,
+        reference_tests,
+        assert_tests,
+        db_path=db_path,
+    )

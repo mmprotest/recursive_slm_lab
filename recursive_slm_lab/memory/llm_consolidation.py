@@ -73,6 +73,7 @@ def _evaluate_tasks(
             function_name=task.function_name,
             signature=task.signature,
             memory_context=memory_context,
+            policy=None,
             k=k,
             max_tokens=max_tokens,
             temperature=temperature,

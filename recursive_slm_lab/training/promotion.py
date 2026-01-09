@@ -31,6 +31,9 @@ class PromotionConfig:
     top_k: int
     base_model_path: str | None
     regression_seed: int = 1337
+    repeats: int = 3
+    deterministic: bool = True
+    seed: int = 1337
 
 
 @dataclass
@@ -91,26 +94,38 @@ def _evaluate_pass_rate(
     temperature: float,
     top_p: float,
     top_k: int,
+    repeats: int,
+    seed: int,
+    deterministic: bool,
 ) -> float:
     outcomes: list[list[bool]] = []
-    for task in tasks:
-        candidates = generate_candidates(
-            backend,
-            task_prompt=task.prompt,
-            function_name=task.function_name,
-            signature=task.signature,
-            memory_context=None,
-            k=k,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            top_p=top_p,
-            top_k=top_k,
-        )
-        task_outcomes: list[bool] = []
-        for candidate in candidates:
-            verification = verify_candidate(candidate.code, task.reference_tests, task.assert_tests)
-            task_outcomes.append(verification.passed)
-        outcomes.append(task_outcomes)
+    k = 1 if deterministic else k
+    temperature = 0.0 if deterministic else temperature
+    top_p = 1.0 if deterministic else top_p
+    top_k = 0 if deterministic else top_k
+    repeats = max(1, repeats)
+    for repeat in range(repeats):
+        if hasattr(backend, "seed"):
+            backend.seed = seed if deterministic else seed + repeat
+        for task in tasks:
+            candidates = generate_candidates(
+                backend,
+                task_prompt=task.prompt,
+                function_name=task.function_name,
+                signature=task.signature,
+                memory_context=None,
+                policy=None,
+                k=k,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                top_k=top_k,
+            )
+            task_outcomes: list[bool] = []
+            for candidate in candidates:
+                verification = verify_candidate(candidate.code, task.reference_tests, task.assert_tests)
+                task_outcomes.append(verification.passed)
+            outcomes.append(task_outcomes)
     return compute_pass_rates(outcomes, k=k).pass_at_1
 
 
@@ -154,10 +169,28 @@ def train_and_maybe_promote(conn: sqlite3.Connection, cfg: PromotionConfig) -> P
     candidate_backend = LocalHFBackend(cfg.base_model_path, adapter_path=training_result.adapter_path)
 
     baseline_heldout = _evaluate_pass_rate(
-        baseline_backend, heldout, cfg.k, cfg.max_tokens, cfg.temperature, cfg.top_p, cfg.top_k
+        baseline_backend,
+        heldout,
+        cfg.k,
+        cfg.max_tokens,
+        cfg.temperature,
+        cfg.top_p,
+        cfg.top_k,
+        cfg.repeats,
+        cfg.seed,
+        cfg.deterministic,
     )
     candidate_heldout = _evaluate_pass_rate(
-        candidate_backend, heldout, cfg.k, cfg.max_tokens, cfg.temperature, cfg.top_p, cfg.top_k
+        candidate_backend,
+        heldout,
+        cfg.k,
+        cfg.max_tokens,
+        cfg.temperature,
+        cfg.top_p,
+        cfg.top_k,
+        cfg.repeats,
+        cfg.seed,
+        cfg.deterministic,
     )
 
     previous_heldout = None
@@ -165,7 +198,16 @@ def train_and_maybe_promote(conn: sqlite3.Connection, cfg: PromotionConfig) -> P
     if previous_adapter:
         previous_backend = LocalHFBackend(cfg.base_model_path, adapter_path=previous_adapter[1])
         previous_heldout = _evaluate_pass_rate(
-            previous_backend, heldout, cfg.k, cfg.max_tokens, cfg.temperature, cfg.top_p, cfg.top_k
+            previous_backend,
+            heldout,
+            cfg.k,
+            cfg.max_tokens,
+            cfg.temperature,
+            cfg.top_p,
+            cfg.top_k,
+            cfg.repeats,
+            cfg.seed,
+            cfg.deterministic,
         )
         previous_regression = _evaluate_pass_rate(
             previous_backend,
@@ -175,6 +217,9 @@ def train_and_maybe_promote(conn: sqlite3.Connection, cfg: PromotionConfig) -> P
             cfg.temperature,
             cfg.top_p,
             cfg.top_k,
+            cfg.repeats,
+            cfg.seed,
+            cfg.deterministic,
         )
         regression_reference = previous_regression
     else:
@@ -186,6 +231,9 @@ def train_and_maybe_promote(conn: sqlite3.Connection, cfg: PromotionConfig) -> P
             cfg.temperature,
             cfg.top_p,
             cfg.top_k,
+            cfg.repeats,
+            cfg.seed,
+            cfg.deterministic,
         )
 
     candidate_regression = _evaluate_pass_rate(
@@ -196,6 +244,9 @@ def train_and_maybe_promote(conn: sqlite3.Connection, cfg: PromotionConfig) -> P
         cfg.temperature,
         cfg.top_p,
         cfg.top_k,
+        cfg.repeats,
+        cfg.seed,
+        cfg.deterministic,
     )
 
     improvement = candidate_heldout - baseline_heldout
