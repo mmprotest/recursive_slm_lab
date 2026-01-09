@@ -27,6 +27,7 @@ class Policy:
     retrieval_top_n: int
     retrieval_min_score: float | None
     retrieval_extra_terms_mode: str
+    retrieval_match_mode: str
     sampling_train: SamplingConfig
     sampling_eval: SamplingConfig
     consolidation: ConsolidationConfig
@@ -48,6 +49,7 @@ class Policy:
             retrieval_top_n=payload["retrieval_top_n"],
             retrieval_min_score=payload.get("retrieval_min_score"),
             retrieval_extra_terms_mode=payload["retrieval_extra_terms_mode"],
+            retrieval_match_mode=payload.get("retrieval_match_mode", "and"),
             sampling_train=sampling_train,
             sampling_eval=sampling_eval,
             consolidation=consolidation,
@@ -78,6 +80,7 @@ DEFAULT_POLICY = Policy(
     retrieval_top_n=3,
     retrieval_min_score=None,
     retrieval_extra_terms_mode="function_prefix+name",
+    retrieval_match_mode="and",
     sampling_train=SamplingConfig(k=8, temperature=0.2, top_p=0.9, top_k=50),
     sampling_eval=SamplingConfig(k=1, temperature=0.0, top_p=1.0, top_k=0),
     consolidation=ConsolidationConfig(

@@ -8,6 +8,9 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from ..config import Config
+from .docker import run_in_docker_sandbox
+
 
 @dataclass
 class SandboxResult:
@@ -28,6 +31,20 @@ def run_in_sandbox(
     Note: Python sandboxing is not perfectly safe. This applies a best-effort
     isolation via temp dirs, environment scrubbing, and no-network hints.
     """
+    config = Config()
+    if config.verify_mode == "docker":
+        result = run_in_docker_sandbox(
+            solution_code,
+            test_code,
+            assert_tests=assert_tests,
+            timeout_s=timeout_s,
+        )
+        return SandboxResult(
+            passed=result.passed,
+            stdout=result.stdout,
+            stderr=result.stderr,
+            returncode=result.returncode,
+        )
     strict_mode = os.environ.get("RSLM_STRICT_VERIFY") == "1"
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_path = Path(temp_dir)

@@ -9,7 +9,7 @@ from ..config import Config
 from ..llm import MockBackend, OpenAICompatBackend, LocalHFBackend
 from ..memory import connect, fetch_passed_episodes, retrieve_memory, get_active_adapter, get_active_policy, get_policy
 from ..policy import SamplingConfig
-from ..tasks import load_tasks, split_tasks, Task
+from ..tasks import load_tasks, load_hidden_tasks, split_tasks, Task
 from ..verify import verify_candidate
 from ..loop.sampling import generate_candidates
 from .metrics import compute_pass_rates, MetricSummary
@@ -61,8 +61,9 @@ def evaluate_conditions(
     seed: int = 1337,
 ) -> dict:
     config = Config(db_path=db_path, backend=backend_name)
-    tasks = load_tasks()
-    _, heldout = split_tasks(tasks, heldout_size=heldout_size)
+    tasks = load_tasks(include_generated=Config().include_generated_tasks)
+    hidden_tasks = load_hidden_tasks()
+    _, heldout, _ = split_tasks(tasks, heldout_size=heldout_size, hidden_tasks=hidden_tasks)
     if task_limit is not None:
         heldout = heldout[:task_limit]
 

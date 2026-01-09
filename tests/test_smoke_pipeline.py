@@ -25,7 +25,7 @@ def test_smoke_pipeline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
     init_db(db_path)
 
     tasks = load_tasks(tasks_path)
-    train_pool, _ = split_tasks(tasks, heldout_size=20)
+    train_pool, _, _ = split_tasks(tasks, heldout_size=20, hidden_tasks=[])
 
     conn = connect(db_path)
     backend = MockBackend(baseline_success_rate=0.2)

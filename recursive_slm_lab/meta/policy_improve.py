@@ -3,14 +3,12 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
-import random
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from ..eval.gating import EvalConfig, evaluate_policy_pass_rate
+from ..eval.robust import evaluate_policy_pair, paired_bootstrap_ci, split_for_gating
 from ..policy import Policy, DEFAULT_POLICY
 from ..memory import register_policy, set_active_policy
-from ..tasks import load_tasks, split_tasks, Task
 
 
 @dataclass
@@ -84,51 +82,52 @@ def evaluate_and_maybe_promote_policy(
     max_drop: float,
     notes: str | None = None,
 ) -> PolicyPromotionResult:
-    tasks = load_tasks()
-    train_pool, heldout = split_tasks(tasks, heldout_size=heldout_size)
+    train_pool, heldout, hidden, weak_hidden_ids = split_for_gating(heldout_size)
     if heldout_limit is not None:
         heldout = heldout[:heldout_limit]
-    regression_tasks = _load_regression_tasks(conn, train_pool, regression_size, regression_seed)
+    if regression_size:
+        hidden = hidden[:regression_size]
     current_policy = _active_policy(conn)
     previous_policy_name = _active_policy_name(conn)
 
-    eval_config = EvalConfig(repeats=repeats, deterministic=deterministic, seed=seed)
-    baseline_metrics = evaluate_policy_pass_rate(
+    baseline_heldout, candidate_heldout = evaluate_policy_pair(
         backend,
         heldout,
         current_policy,
-        repeats=eval_config.repeats,
-        seed=eval_config.seed,
-        deterministic=eval_config.deterministic,
-    )
-    candidate_metrics = evaluate_policy_pass_rate(
-        backend,
-        heldout,
         candidate_policy,
-        repeats=eval_config.repeats,
-        seed=eval_config.seed,
-        deterministic=eval_config.deterministic,
+        max_tokens=256,
+        deterministic=deterministic,
+        seed=seed,
+        repeats=repeats,
+        conn=conn,
     )
-    regression_baseline = evaluate_policy_pass_rate(
+    baseline_hidden, candidate_hidden = evaluate_policy_pair(
         backend,
-        regression_tasks,
+        hidden,
         current_policy,
-        repeats=eval_config.repeats,
-        seed=eval_config.seed,
-        deterministic=eval_config.deterministic,
-    )
-    regression_candidate = evaluate_policy_pass_rate(
-        backend,
-        regression_tasks,
         candidate_policy,
-        repeats=eval_config.repeats,
-        seed=eval_config.seed,
-        deterministic=eval_config.deterministic,
+        max_tokens=256,
+        deterministic=deterministic,
+        seed=seed,
+        repeats=repeats,
+        conn=conn,
     )
-
-    improvement = candidate_metrics["mean"] - baseline_metrics["mean"]
-    regression_drop = regression_candidate["mean"] - regression_baseline["mean"]
-    promoted = improvement >= min_delta and regression_drop >= -max_drop
+    heldout_delta = paired_bootstrap_ci(
+        baseline_heldout.per_task_pass_at_1,
+        candidate_heldout.per_task_pass_at_1,
+        seed=seed,
+    )
+    hidden_delta = paired_bootstrap_ci(
+        baseline_hidden.per_task_pass_at_1,
+        candidate_hidden.per_task_pass_at_1,
+        seed=seed,
+    )
+    promoted = (
+        heldout_delta.mean >= min_delta
+        and heldout_delta.ci_low >= 0.0
+        and hidden_delta.mean >= -max_drop
+        and hidden_delta.ci_low >= -max_drop
+    )
     decision = "accept" if promoted else "reject"
 
     candidate_name = None
@@ -139,16 +138,29 @@ def evaluate_and_maybe_promote_policy(
 
     metrics = {
         "heldout": {
-            "baseline": baseline_metrics,
-            "candidate": candidate_metrics,
-            "improvement": improvement,
+            "baseline": {
+                "pass_at_1": baseline_heldout.pass_at_1,
+                "pass_at_k": baseline_heldout.pass_at_k,
+            },
+            "candidate": {
+                "pass_at_1": candidate_heldout.pass_at_1,
+                "pass_at_k": candidate_heldout.pass_at_k,
+            },
+            "delta": heldout_delta.__dict__,
             "min_delta": min_delta,
         },
-        "regression": {
-            "baseline": regression_baseline,
-            "candidate": regression_candidate,
-            "drop": regression_drop,
+        "hidden": {
+            "baseline": {
+                "pass_at_1": baseline_hidden.pass_at_1,
+                "pass_at_k": baseline_hidden.pass_at_k,
+            },
+            "candidate": {
+                "pass_at_1": candidate_hidden.pass_at_1,
+                "pass_at_k": candidate_hidden.pass_at_k,
+            },
+            "delta": hidden_delta.__dict__,
             "max_drop": max_drop,
+            "weak_task_ids": weak_hidden_ids,
         },
     }
     _record_policy_promotion(
@@ -167,6 +179,7 @@ def _validate_policy_dict(payload: dict) -> dict:
     payload = dict(payload)
     payload["retrieval_top_n"] = int(_clamp(payload.get("retrieval_top_n", 0), 0, 10))
     payload["retrieval_extra_terms_mode"] = payload.get("retrieval_extra_terms_mode", "none")
+    payload["retrieval_match_mode"] = payload.get("retrieval_match_mode", "and")
     for key in ("sampling_train", "sampling_eval"):
         block = payload.get(key, {})
         block["k"] = int(_clamp(block.get("k", 1), 1, 16))
@@ -201,41 +214,6 @@ def _extract_json_text(text: str) -> str:
     if match:
         return match.group(0)
     return text
-
-
-def _load_regression_tasks(
-    conn: sqlite3.Connection,
-    train_pool: list[Task],
-    regression_size: int,
-    seed: int,
-) -> list[Task]:
-    rows = conn.execute(
-        "SELECT task_id FROM regression_tasks ORDER BY rank ASC"
-    ).fetchall()
-    task_ids = [row[0] for row in rows]
-    if len(task_ids) < regression_size:
-        remaining = [task for task in train_pool if task.task_id not in task_ids]
-        rng = random.Random(seed)
-        rng.shuffle(remaining)
-        needed = regression_size - len(task_ids)
-        additions = remaining[:needed]
-        now = _utc_now()
-        for idx, task in enumerate(additions, start=len(task_ids)):
-            conn.execute(
-                "INSERT OR IGNORE INTO regression_tasks (task_id, rank, created_at) VALUES (?, ?, ?)",
-                (task.task_id, idx, now),
-            )
-        conn.commit()
-        task_ids += [task.task_id for task in additions]
-    task_map = {task.task_id: task for task in train_pool}
-    selected = [task_map[task_id] for task_id in task_ids if task_id in task_map]
-    selected = selected[:regression_size]
-    if len(selected) < regression_size:
-        raise ValueError(
-            f"Not enough training tasks to fill regression_size={regression_size} "
-            f"(only {len(selected)} available)."
-        )
-    return selected
 
 
 def _utc_now() -> str:

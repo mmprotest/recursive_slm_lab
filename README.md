@@ -10,6 +10,22 @@ This repo evaluates four conditions:
 
 The system attempts tasks, verifies candidates with unit tests, stores only passing episodes in SQLite, consolidates memory into rules and procedures, and optionally trains LoRA adapters on verified traces.
 
+## What changed and why (short summary)
+
+- Added heldout + hidden splits with statistical gating so promotions rely on robust evidence, not a single noisy mean.
+- Added Docker-based verification mode (optional) for safer isolation.
+- Added provenance, activation, and rollback for rules/procedures so memory can be audited and reverted safely.
+- Added curriculum mining and run manifests to keep iteration traceable and extensible.
+
+## Claim boundaries
+
+This repository is a research-grade demo of recursive self-improvement for code tasks. It is not:
+- A production-ready autonomous agent platform.
+- A guarantee of continuous improvement without careful evaluation and human oversight.
+- A replacement for full security sandboxing or formal verification.
+
+It is intended to show how to enforce evaluation gates, provenance, and rollback for changes that affect behavior.
+
 ## Quickstart
 
 ```bash
@@ -101,21 +117,26 @@ Adapters cannot be applied in this mode, so the "learned" condition is unavailab
 - `RSLM_FAST_VERIFY`: set to `1` to use assert-based fast verification
 - `RSLM_STRICT_VERIFY`: set to `1` to apply tighter verifier limits
 - `RSLM_VERIFY_WORKERS`: parallel verification workers (defaults to a small CPU-based value)
+- `RSLM_VERIFY_MODE`: `local` (default) or `docker` for containerized verification
+- `RSLM_INCLUDE_GENERATED_TASKS`: set to `1` to include generated curriculum tasks in training
 
 ## CLI overview
 
 ```bash
 rslm init-db --db artifacts/memory.sqlite
 rslm seed-tasks
+rslm seed-hidden-tasks
 rslm run-iteration --db artifacts/memory.sqlite --tasks bundled --k 4 --mode trainpool --backend mock --memory-enabled --heldout-size 20 --task-limit 30
 rslm consolidate --db artifacts/memory.sqlite --min-evidence 1
 rslm consolidate-llm --db artifacts/memory.sqlite --backend openai --heldout-size 20 --task-limit 20 --sample-episodes 80 --max-rules 20 --min-gain 0.01
 rslm eval --db artifacts/memory.sqlite --backend mock --conditions all --k 1 --heldout-size 20 --task-limit 20 --output artifacts/results_iter001.json
+rslm eval-robust --db artifacts/memory.sqlite --backend mock --conditions all --k 1 --heldout-size 20 --task-limit 20
 rslm plot --input artifacts/memory.sqlite --output artifacts/results.png
 rslm policy-list --db artifacts/memory.sqlite
 ```
 
 Note: Typer boolean flags use `--memory-enabled/--no-memory` (no extra `true/false` argument).
+The CLI also accepts `--memory-enabled true|false` for backward compatibility.
 
 ## Generate tasks
 
@@ -123,6 +144,7 @@ Regenerate the bundled task set with deterministic, hidden pytest tests:
 
 ```bash
 rslm seed-tasks --regen --regen-families --count 200
+rslm seed-hidden-tasks --count 40
 ```
 
 Then run a short iteration and evaluation:
@@ -133,6 +155,16 @@ rslm eval --db artifacts/memory.sqlite --backend mock --conditions all --k 1 --h
 ```
 
 Task tests are stored only in the verifier and are not exposed to the model prompts.
+
+## Hidden gating & robust eval
+
+Hidden tasks are stored in `recursive_slm_lab/tasks/hidden_tasks.jsonl` and are used only for promotion gating.
+Weak hidden tasks (those that allow trivial cheats) are automatically excluded from gating.
+Use the robust evaluator to report heldout + hidden splits:
+
+```bash
+rslm eval-robust --db artifacts/memory.sqlite --backend mock --conditions all --heldout-size 20 --task-limit 20
+```
 
 ## Recursive self-improvement (policy loop)
 
@@ -195,6 +227,46 @@ Train-and-promote (LocalHF only) trains an adapter and activates it only if it p
 ```bash
 rslm train-and-promote --db artifacts/memory.sqlite --out adapters/adapter_v002 --backend localhf --heldout-size 40 --regression-size 25 --min-improvement 0.02 --max-regression-drop 0.0
 ```
+
+Promotions now require statistically defensible improvements on heldout and no unacceptable regressions on hidden.
+
+## Docker verifier mode
+
+Set verification mode to run candidate tests inside a locked-down Docker container:
+
+```bash
+export RSLM_VERIFY_MODE=docker
+rslm eval --db artifacts/memory.sqlite --backend mock --conditions baseline
+```
+
+Docker mode fails fast if Docker is missing and runs with no network, read-only filesystem, and strict resource limits.
+
+## Memory provenance and rollback
+
+List/activate/deactivate/rollback rules and procedures:
+
+```bash
+rslm rules list --db artifacts/memory.sqlite --all
+rslm rules activate --db artifacts/memory.sqlite --rule-id 3
+rslm rules rollback --db artifacts/memory.sqlite --to-rule-id 2
+
+rslm procedures list --db artifacts/memory.sqlite --all
+rslm procedures deactivate --db artifacts/memory.sqlite --procedure-id 4
+```
+
+## Curriculum mining
+
+Mine failures and generate new tasks to expand training:
+
+```bash
+rslm mine-curriculum --db artifacts/memory.sqlite --out artifacts/generated_tasks.jsonl --max-new 50
+```
+
+Set `RSLM_INCLUDE_GENERATED_TASKS=1` to include generated tasks in the train pool (never in hidden).
+
+## Run manifests
+
+Each `run-iteration` and `eval-robust` writes an artifact under `artifacts/runs/` with config, task ids, metrics, and git hash.
 
 ## Notes
 

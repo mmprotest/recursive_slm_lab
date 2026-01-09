@@ -21,9 +21,15 @@ class Task:
 
 
 BUNDLED_PATH = Path(__file__).parent / "bundled_tasks.jsonl"
+HIDDEN_PATH = Path(__file__).parent / "hidden_tasks.jsonl"
+GENERATED_PATH = Path("artifacts/generated_tasks.jsonl")
 
 
-def load_tasks(path: Path | str = BUNDLED_PATH) -> list[Task]:
+def load_tasks(
+    path: Path | str = BUNDLED_PATH,
+    include_generated: bool = False,
+    generated_path: Path | str = GENERATED_PATH,
+) -> list[Task]:
     path = Path(path)
     tasks: list[Task] = []
     with path.open("r", encoding="utf-8") as handle:
@@ -34,7 +40,18 @@ def load_tasks(path: Path | str = BUNDLED_PATH) -> list[Task]:
             payload.setdefault("category", "uncategorized")
             payload.setdefault("difficulty", 1)
             tasks.append(Task(**payload))
+    if include_generated:
+        gen_path = Path(generated_path)
+        if gen_path.exists():
+            tasks.extend(load_tasks(gen_path))
     return tasks
+
+
+def load_hidden_tasks(path: Path | str = HIDDEN_PATH) -> list[Task]:
+    path = Path(path)
+    if not path.exists():
+        return []
+    return load_tasks(path)
 
 
 def validate_tasks(tasks: Iterable[Task]) -> None:
@@ -62,7 +79,8 @@ def split_tasks(
     heldout_size: int,
     seed: int = 1337,
     heldout_categories: set[str] | None = None,
-) -> tuple[list[Task], list[Task]]:
+    hidden_tasks: list[Task] | None = None,
+) -> tuple[list[Task], list[Task], list[Task]]:
     heldout_categories = heldout_categories or {"parsing"}
     heldout_only = [
         task
@@ -84,4 +102,5 @@ def split_tasks(
             f"Not enough tasks to fill heldout_size={heldout_size} "
             f"(only {len(heldout)} available)."
         )
-    return train_pool, heldout
+    hidden = hidden_tasks or []
+    return train_pool, heldout, hidden

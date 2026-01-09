@@ -53,7 +53,11 @@ def _make_task(
     return payload
 
 
-def _add_const_task(k: int) -> dict[str, str | list[str]]:
+def _add_const_task(
+    k: int,
+    difficulty: int = 1,
+    random_range: int = 100,
+) -> dict[str, str | list[str]]:
     suffix = f"{k}" if k >= 0 else f"neg{abs(k)}"
     function_name = f"add_const_{suffix}"
     prompt = _format_prompt_add(k)
@@ -73,7 +77,7 @@ def _add_const_task(k: int) -> dict[str, str | list[str]]:
         def test_randomized():
             random.seed(1001)
             for _ in range(50):
-                n = random.randint(-100, 100)
+                n = random.randint(-{random_range}, {random_range})
                 assert {function_name}(n) == n + {k}
         """
     ).strip()
@@ -82,10 +86,22 @@ def _add_const_task(k: int) -> dict[str, str | list[str]]:
         f"assert {function_name}(5) == {5 + k}",
         f"assert {function_name}(-3) == {-3 + k}",
     ]
-    return _make_task(prompt, function_name, "(n)", reference_tests, assert_tests, category="math", difficulty=1)
+    return _make_task(
+        prompt,
+        function_name,
+        "(n)",
+        reference_tests,
+        assert_tests,
+        category="math",
+        difficulty=difficulty,
+    )
 
 
-def _mul_const_task(k: int) -> dict[str, str | list[str]]:
+def _mul_const_task(
+    k: int,
+    difficulty: int = 1,
+    random_range: int = 50,
+) -> dict[str, str | list[str]]:
     suffix = f"{k}" if k >= 0 else f"neg{abs(k)}"
     function_name = f"mul_const_{suffix}"
     prompt = _format_prompt_mul(k)
@@ -105,7 +121,7 @@ def _mul_const_task(k: int) -> dict[str, str | list[str]]:
         def test_randomized():
             random.seed(2002)
             for _ in range(50):
-                n = random.randint(-50, 50)
+                n = random.randint(-{random_range}, {random_range})
                 assert {function_name}(n) == n * {k}
         """
     ).strip()
@@ -114,7 +130,15 @@ def _mul_const_task(k: int) -> dict[str, str | list[str]]:
         f"assert {function_name}(3) == {3 * k}",
         f"assert {function_name}(-2) == {-2 * k}",
     ]
-    return _make_task(prompt, function_name, "(n)", reference_tests, assert_tests, category="math", difficulty=1)
+    return _make_task(
+        prompt,
+        function_name,
+        "(n)",
+        reference_tests,
+        assert_tests,
+        category="math",
+        difficulty=difficulty,
+    )
 
 
 def _rotate_left_task() -> dict[str, str | list[str]]:
@@ -1755,6 +1779,19 @@ def generate_tasks(count: int) -> list[dict[str, str | list[str]]]:
         tasks += extras[:needed]
 
     return tasks[:count]
+
+
+def generate_constant_tasks(
+    add_values: list[int],
+    mul_values: list[int],
+    difficulty: int = 2,
+    add_range: int = 200,
+    mul_range: int = 120,
+) -> list[dict[str, str | list[str]]]:
+    tasks: list[dict[str, str | list[str]]] = []
+    tasks += [_add_const_task(k, difficulty=difficulty, random_range=add_range) for k in add_values]
+    tasks += [_mul_const_task(k, difficulty=difficulty, random_range=mul_range) for k in mul_values]
+    return tasks
 
 
 def write_tasks(tasks: list[dict[str, str | list[str]]], output_path: Path) -> None:

@@ -46,4 +46,4 @@ build-backend = "setuptools.build_meta"
 packages = ["recursive_slm_lab"]
 
 [tool.setuptools.package-data]
-recursive_slm_lab = ["tasks/bundled_tasks.jsonl", "memory/schema.sql"]
+recursive_slm_lab = ["tasks/bundled_tasks.jsonl", "tasks/hidden_tasks.jsonl", "memory/schema.sql"]

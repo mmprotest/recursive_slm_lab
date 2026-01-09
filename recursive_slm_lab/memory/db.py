@@ -15,6 +15,7 @@ SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
 @dataclass
 class Episode:
+    episode_id: int
     task_id: str
     condition: str
     prompt: str
@@ -41,6 +42,32 @@ class RunMeta:
     top_k: int
     notes: str | None = None
     config_json: dict | None = None
+
+
+@dataclass
+class MemoryRule:
+    rule_id: int
+    key: str
+    text: str
+    created_at: str
+    origin_episode_ids: list[int]
+    evidence_count: int
+    eval_snapshot: dict | None
+    active: bool
+    superseded_by: int | None
+
+
+@dataclass
+class MemoryProcedure:
+    procedure_id: int
+    pattern: str
+    text: str
+    created_at: str
+    origin_episode_ids: list[int]
+    evidence_count: int
+    eval_snapshot: dict | None
+    active: bool
+    superseded_by: int | None
 
 
 def _utc_now() -> str:
@@ -234,7 +261,7 @@ def insert_episode_many(
 def fetch_passed_episodes(conn: sqlite3.Connection) -> list[Episode]:
     rows = conn.execute(
         """
-        SELECT task_id, condition, prompt, candidate_code, passed, test_log, created_at, code_hash
+        SELECT id, task_id, condition, prompt, candidate_code, passed, test_log, created_at, code_hash
         FROM episodes
         WHERE passed = 1
         ORDER BY created_at DESC
@@ -242,14 +269,15 @@ def fetch_passed_episodes(conn: sqlite3.Connection) -> list[Episode]:
     ).fetchall()
     return [
         Episode(
-            task_id=row[0],
-            condition=row[1],
-            prompt=row[2],
-            candidate_code=row[3],
-            passed=bool(row[4]),
-            test_log=row[5],
-            created_at=row[6],
-            code_hash=row[7],
+            episode_id=int(row[0]),
+            task_id=row[1],
+            condition=row[2],
+            prompt=row[3],
+            candidate_code=row[4],
+            passed=bool(row[5]),
+            test_log=row[6],
+            created_at=row[7],
+            code_hash=row[8],
         )
         for row in rows
     ]
@@ -312,6 +340,170 @@ def wipe_memory(conn: sqlite3.Connection) -> None:
     conn.execute("DELETE FROM failures")
     conn.execute("DELETE FROM semantic_rules")
     conn.execute("DELETE FROM procedures")
+    conn.commit()
+
+
+def list_rules(conn: sqlite3.Connection, include_inactive: bool = False) -> list[MemoryRule]:
+    query = (
+        "SELECT id, key, rule_text, created_at, origin_episode_ids, evidence_count, eval_snapshot, active, superseded_by "
+        "FROM semantic_rules"
+    )
+    if not include_inactive:
+        query += " WHERE active = 1"
+    query += " ORDER BY created_at DESC"
+    rows = conn.execute(query).fetchall()
+    rules: list[MemoryRule] = []
+    for row in rows:
+        origin_ids = json.loads(row[4]) if row[4] else []
+        eval_snapshot = json.loads(row[6]) if row[6] else None
+        rules.append(
+            MemoryRule(
+                rule_id=int(row[0]),
+                key=row[1],
+                text=row[2],
+                created_at=row[3],
+                origin_episode_ids=origin_ids,
+                evidence_count=int(row[5]),
+                eval_snapshot=eval_snapshot,
+                active=bool(row[7]),
+                superseded_by=row[8],
+            )
+        )
+    return rules
+
+
+def list_procedures(conn: sqlite3.Connection, include_inactive: bool = False) -> list[MemoryProcedure]:
+    query = (
+        "SELECT id, pattern, recipe_text, created_at, origin_episode_ids, evidence_count, eval_snapshot, active, superseded_by "
+        "FROM procedures"
+    )
+    if not include_inactive:
+        query += " WHERE active = 1"
+    query += " ORDER BY created_at DESC"
+    rows = conn.execute(query).fetchall()
+    procedures: list[MemoryProcedure] = []
+    for row in rows:
+        origin_ids = json.loads(row[4]) if row[4] else []
+        eval_snapshot = json.loads(row[6]) if row[6] else None
+        procedures.append(
+            MemoryProcedure(
+                procedure_id=int(row[0]),
+                pattern=row[1],
+                text=row[2],
+                created_at=row[3],
+                origin_episode_ids=origin_ids,
+                evidence_count=int(row[5]),
+                eval_snapshot=eval_snapshot,
+                active=bool(row[7]),
+                superseded_by=row[8],
+            )
+        )
+    return procedures
+
+
+def activate_rule(conn: sqlite3.Connection, rule_id: int) -> None:
+    row = conn.execute(
+        "SELECT key FROM semantic_rules WHERE id = ?",
+        (rule_id,),
+    ).fetchone()
+    if not row:
+        raise ValueError(f"Rule id {rule_id} not found")
+    key = row[0]
+    conn.execute(
+        "UPDATE semantic_rules SET active = 0, superseded_by = ? WHERE key = ? AND active = 1",
+        (rule_id, key),
+    )
+    conn.execute(
+        "UPDATE semantic_rules SET active = 1, superseded_by = NULL WHERE id = ?",
+        (rule_id,),
+    )
+    conn.commit()
+
+
+def deactivate_rule(conn: sqlite3.Connection, rule_id: int) -> None:
+    conn.execute("UPDATE semantic_rules SET active = 0 WHERE id = ?", (rule_id,))
+    conn.commit()
+
+
+def rollback_rules(
+    conn: sqlite3.Connection,
+    to_timestamp: str | None = None,
+    to_rule_id: int | None = None,
+) -> None:
+    if not to_timestamp and to_rule_id is None:
+        raise ValueError("rollback_rules requires to_timestamp or to_rule_id")
+    if to_rule_id is not None:
+        conn.execute("UPDATE semantic_rules SET active = 0 WHERE id > ?", (to_rule_id,))
+        cutoff_clause = "id <= ?"
+        cutoff_value = to_rule_id
+    else:
+        conn.execute("UPDATE semantic_rules SET active = 0 WHERE created_at > ?", (to_timestamp,))
+        cutoff_clause = "created_at <= ?"
+        cutoff_value = to_timestamp
+    keys = [row[0] for row in conn.execute("SELECT DISTINCT key FROM semantic_rules").fetchall()]
+    for key in keys:
+        row = conn.execute(
+            f"SELECT id FROM semantic_rules WHERE key = ? AND {cutoff_clause} ORDER BY created_at DESC, id DESC LIMIT 1",
+            (key, cutoff_value),
+        ).fetchone()
+        if row:
+            conn.execute(
+                "UPDATE semantic_rules SET active = 1, superseded_by = NULL WHERE id = ?",
+                (row[0],),
+            )
+    conn.commit()
+
+
+def activate_procedure(conn: sqlite3.Connection, procedure_id: int) -> None:
+    row = conn.execute(
+        "SELECT pattern FROM procedures WHERE id = ?",
+        (procedure_id,),
+    ).fetchone()
+    if not row:
+        raise ValueError(f"Procedure id {procedure_id} not found")
+    pattern = row[0]
+    conn.execute(
+        "UPDATE procedures SET active = 0, superseded_by = ? WHERE pattern = ? AND active = 1",
+        (procedure_id, pattern),
+    )
+    conn.execute(
+        "UPDATE procedures SET active = 1, superseded_by = NULL WHERE id = ?",
+        (procedure_id,),
+    )
+    conn.commit()
+
+
+def deactivate_procedure(conn: sqlite3.Connection, procedure_id: int) -> None:
+    conn.execute("UPDATE procedures SET active = 0 WHERE id = ?", (procedure_id,))
+    conn.commit()
+
+
+def rollback_procedures(
+    conn: sqlite3.Connection,
+    to_timestamp: str | None = None,
+    to_procedure_id: int | None = None,
+) -> None:
+    if not to_timestamp and to_procedure_id is None:
+        raise ValueError("rollback_procedures requires to_timestamp or to_procedure_id")
+    if to_procedure_id is not None:
+        conn.execute("UPDATE procedures SET active = 0 WHERE id > ?", (to_procedure_id,))
+        cutoff_clause = "id <= ?"
+        cutoff_value = to_procedure_id
+    else:
+        conn.execute("UPDATE procedures SET active = 0 WHERE created_at > ?", (to_timestamp,))
+        cutoff_clause = "created_at <= ?"
+        cutoff_value = to_timestamp
+    patterns = [row[0] for row in conn.execute("SELECT DISTINCT pattern FROM procedures").fetchall()]
+    for pattern in patterns:
+        row = conn.execute(
+            f"SELECT id FROM procedures WHERE pattern = ? AND {cutoff_clause} ORDER BY created_at DESC, id DESC LIMIT 1",
+            (pattern, cutoff_value),
+        ).fetchone()
+        if row:
+            conn.execute(
+                "UPDATE procedures SET active = 1, superseded_by = NULL WHERE id = ?",
+                (row[0],),
+            )
     conn.commit()
 
 

@@ -26,6 +26,7 @@ def test_policy_db_roundtrip(tmp_path: Path) -> None:
         retrieval_top_n=2,
         retrieval_min_score=None,
         retrieval_extra_terms_mode="none",
+        retrieval_match_mode="and",
         sampling_train=SamplingConfig(k=2, temperature=0.2, top_p=0.9, top_k=50),
         sampling_eval=SamplingConfig(k=1, temperature=0.0, top_p=1.0, top_k=0),
         consolidation=ConsolidationConfig(
@@ -49,6 +50,7 @@ def test_prompt_uses_policy_override() -> None:
         retrieval_top_n=1,
         retrieval_min_score=None,
         retrieval_extra_terms_mode="none",
+        retrieval_match_mode="and",
         sampling_train=SamplingConfig(k=2, temperature=0.2, top_p=0.9, top_k=50),
         sampling_eval=SamplingConfig(k=1, temperature=0.0, top_p=1.0, top_k=0),
         consolidation=ConsolidationConfig(

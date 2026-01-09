@@ -6,7 +6,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from ..eval.metrics import compute_pass_rates
+from ..eval.robust import paired_bootstrap_ci, SplitResult
 from ..llm.base import LLMBackend
 from ..loop.sampling import generate_candidates
 from ..tasks import Task
@@ -14,8 +14,6 @@ from ..verify import verify_candidate
 from .db import fetch_passed_episodes
 from .retrieval import MemoryContext, MemoryHit
 
-
-_TOLERANCE = 0.005
 
 
 @dataclass
@@ -64,7 +62,7 @@ def _evaluate_tasks(
     temperature: float,
     top_p: float,
     top_k: int,
-) -> float:
+) -> SplitResult:
     outcomes: list[list[bool]] = []
     for task in tasks:
         candidates = generate_candidates(
@@ -85,16 +83,27 @@ def _evaluate_tasks(
             verification = verify_candidate(candidate.code, task.reference_tests, task.assert_tests)
             task_outcomes.append(verification.passed)
         outcomes.append(task_outcomes)
-    return compute_pass_rates(outcomes, k=k).pass_at_1
+    pass_at_1_vec = [1 if row and row[0] else 0 for row in outcomes]
+    pass_at_k_vec = [1 if any(row[:k]) else 0 for row in outcomes]
+    pass_at_1 = sum(pass_at_1_vec) / len(pass_at_1_vec) if pass_at_1_vec else 0.0
+    pass_at_k = sum(pass_at_k_vec) / len(pass_at_k_vec) if pass_at_k_vec else 0.0
+    return SplitResult(
+        pass_at_1=pass_at_1,
+        pass_at_k=pass_at_k,
+        per_task_pass_at_1=pass_at_1_vec,
+        per_task_pass_at_k=pass_at_k_vec,
+    )
 
 
 def consolidate_llm(
     conn: sqlite3.Connection,
     backend: LLMBackend,
     heldout_tasks: list[Task],
+    hidden_tasks: list[Task],
     sample_episodes: int = 80,
     max_rules: int = 20,
     min_gain: float = 0.01,
+    max_hidden_regress: float = 0.0,
     k: int = 1,
     max_tokens: int = 256,
     temperature: float = 0.2,
@@ -109,6 +118,7 @@ def consolidate_llm(
         {"prompt": ep.prompt, "candidate_code": ep.candidate_code}
         for ep in episodes
     ]
+    origin_episode_ids = [ep.episode_id for ep in episodes]
     prompt_payload = json.dumps({"examples": examples}, indent=2)
     system_prompt = (
         "You are a strict JSON generator. Do not include commentary."
@@ -167,6 +177,9 @@ def consolidate_llm(
     if validation_size == 0:
         report["error"] = "Heldout tasks unavailable for consolidation validation."
         return report
+    if not hidden_tasks:
+        report["error"] = "Hidden tasks unavailable for consolidation validation."
+        return report
 
     for candidate in candidates:
         memory_context = MemoryContext(
@@ -179,63 +192,118 @@ def consolidate_llm(
         with_rule = _evaluate_tasks(
             backend, subset, memory_context, k, max_tokens, temperature, top_p, top_k
         )
-        gain = with_rule - baseline
+        delta_heldout = paired_bootstrap_ci(
+            baseline.per_task_pass_at_1,
+            with_rule.per_task_pass_at_1,
+            seed=1337,
+        )
 
-        fallback_subset = _select_validation_tasks(heldout_tasks, [], validation_size, seed=2024)
+        hidden_subset = _select_validation_tasks(hidden_tasks, candidate.keywords, validation_size, seed=2024)
         baseline_fallback = _evaluate_tasks(
-            backend, fallback_subset, None, k, max_tokens, temperature, top_p, top_k
+            backend, hidden_subset, None, k, max_tokens, temperature, top_p, top_k
         )
         with_rule_fallback = _evaluate_tasks(
-            backend, fallback_subset, memory_context, k, max_tokens, temperature, top_p, top_k
+            backend, hidden_subset, memory_context, k, max_tokens, temperature, top_p, top_k
         )
-        fallback_gain = with_rule_fallback - baseline_fallback
+        delta_hidden = paired_bootstrap_ci(
+            baseline_fallback.per_task_pass_at_1,
+            with_rule_fallback.per_task_pass_at_1,
+            seed=2024,
+        )
 
-        if gain >= min_gain and fallback_gain >= -_TOLERANCE:
+        accepted = (
+            delta_heldout.mean >= min_gain
+            and delta_heldout.ci_low >= 0.0
+            and delta_hidden.mean >= -max_hidden_regress
+            and delta_hidden.ci_low >= -max_hidden_regress
+        )
+
+        if accepted:
             evidence_count = len(subset)
             now = _utc_now()
+            eval_snapshot = json.dumps(
+                {
+                    "heldout": {
+                        "pass_at_1": with_rule.pass_at_1,
+                        "pass_at_k": with_rule.pass_at_k,
+                        "delta": delta_heldout.__dict__,
+                    },
+                    "hidden": {
+                        "pass_at_1": with_rule_fallback.pass_at_1,
+                        "pass_at_k": with_rule_fallback.pass_at_k,
+                        "delta": delta_hidden.__dict__,
+                    },
+                }
+            )
             if candidate.kind == "rule":
+                cursor = conn.execute(
+                    """
+                    INSERT INTO semantic_rules
+                    (key, rule_text, created_at, origin_episode_ids, evidence_count, eval_snapshot, active, superseded_by, last_verified_at)
+                    VALUES (?, ?, ?, ?, ?, ?, 1, NULL, ?)
+                    """,
+                    (
+                        candidate.key,
+                        candidate.text,
+                        now,
+                        json.dumps(origin_episode_ids),
+                        evidence_count,
+                        eval_snapshot,
+                        now,
+                    ),
+                )
+                new_id = int(cursor.lastrowid)
                 conn.execute(
                     """
-                    INSERT INTO semantic_rules (key, rule_text, evidence_count, last_verified_at)
-                    VALUES (?, ?, ?, ?)
-                    ON CONFLICT(key) DO UPDATE SET
-                        rule_text=excluded.rule_text,
-                        evidence_count=excluded.evidence_count,
-                        last_verified_at=excluded.last_verified_at
+                    UPDATE semantic_rules SET active = 0, superseded_by = ?
+                    WHERE key = ? AND id != ? AND active = 1
                     """,
-                    (candidate.key, candidate.text, evidence_count, now),
+                    (new_id, candidate.key, new_id),
                 )
             else:
+                cursor = conn.execute(
+                    """
+                    INSERT INTO procedures
+                    (pattern, recipe_text, created_at, origin_episode_ids, evidence_count, eval_snapshot, active, superseded_by, last_verified_at)
+                    VALUES (?, ?, ?, ?, ?, ?, 1, NULL, ?)
+                    """,
+                    (
+                        candidate.key,
+                        candidate.text,
+                        now,
+                        json.dumps(origin_episode_ids),
+                        evidence_count,
+                        eval_snapshot,
+                        now,
+                    ),
+                )
+                new_id = int(cursor.lastrowid)
                 conn.execute(
                     """
-                    INSERT INTO procedures (pattern, recipe_text, evidence_count, last_verified_at)
-                    VALUES (?, ?, ?, ?)
-                    ON CONFLICT(pattern) DO UPDATE SET
-                        recipe_text=excluded.recipe_text,
-                        evidence_count=excluded.evidence_count,
-                        last_verified_at=excluded.last_verified_at
+                    UPDATE procedures SET active = 0, superseded_by = ?
+                    WHERE pattern = ? AND id != ? AND active = 1
                     """,
-                    (candidate.key, candidate.text, evidence_count, now),
+                    (new_id, candidate.key, new_id),
                 )
             report["accepted"].append(
                 {
                     "kind": candidate.kind,
                     "key": candidate.key,
-                    "gain": gain,
-                    "fallback_gain": fallback_gain,
+                    "delta_heldout": delta_heldout.__dict__,
+                    "delta_hidden": delta_hidden.__dict__,
                     "evidence_count": evidence_count,
                 }
             )
         else:
             reason = "gain_below_threshold"
-            if fallback_gain < -_TOLERANCE:
-                reason = "fallback_regression"
+            if delta_hidden.mean < -max_hidden_regress:
+                reason = "hidden_regression"
             report["rejected"].append(
                 {
                     "kind": candidate.kind,
                     "key": candidate.key,
-                    "gain": gain,
-                    "fallback_gain": fallback_gain,
+                    "delta_heldout": delta_heldout.__dict__,
+                    "delta_hidden": delta_hidden.__dict__,
                     "reason": reason,
                 }
             )
