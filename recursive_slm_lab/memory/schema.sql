@@ -104,6 +104,38 @@ CREATE TABLE IF NOT EXISTS regression_tasks (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS policies (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL,
+    name TEXT NOT NULL UNIQUE,
+    parent_policy_name TEXT,
+    policy_json TEXT NOT NULL,
+    notes TEXT
+);
+
+CREATE TABLE IF NOT EXISTS active_policy (
+    singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+    policy_name TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS policy_promotions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL,
+    previous_policy_name TEXT,
+    candidate_policy_name TEXT,
+    decision TEXT NOT NULL,
+    metrics_json TEXT NOT NULL,
+    notes TEXT
+);
+
+CREATE TABLE IF NOT EXISTS verification_cache (
+    key TEXT PRIMARY KEY,
+    passed INTEGER NOT NULL,
+    log TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS episodes_fts USING fts5(
     prompt, candidate_code, test_log, content='episodes', content_rowid='id'
 );

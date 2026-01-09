@@ -51,4 +51,12 @@ def test_migrations_add_new_columns(tmp_path: Path) -> None:
         "SELECT name FROM sqlite_master WHERE type='table' AND name='runs'"
     ).fetchone()
     assert runs_table is not None
+    policy_table = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='policies'"
+    ).fetchone()
+    assert policy_table is not None
+    cache_table = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='verification_cache'"
+    ).fetchone()
+    assert cache_table is not None
     conn.close()

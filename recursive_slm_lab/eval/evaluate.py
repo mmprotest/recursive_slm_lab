@@ -7,7 +7,8 @@ from pathlib import Path
 
 from ..config import Config
 from ..llm import MockBackend, OpenAICompatBackend, LocalHFBackend
-from ..memory import connect, fetch_passed_episodes, retrieve_memory, get_active_adapter
+from ..memory import connect, fetch_passed_episodes, retrieve_memory, get_active_adapter, get_active_policy, get_policy
+from ..policy import SamplingConfig
 from ..tasks import load_tasks, split_tasks, Task
 from ..verify import verify_candidate
 from ..loop.sampling import generate_candidates
@@ -54,6 +55,10 @@ def evaluate_conditions(
     temperature: float | None = None,
     top_p: float | None = None,
     top_k: int | None = None,
+    policy_name: str | None = None,
+    repeats: int = 1,
+    deterministic: bool = False,
+    seed: int = 1337,
 ) -> dict:
     config = Config(db_path=db_path, backend=backend_name)
     tasks = load_tasks()
@@ -65,11 +70,13 @@ def evaluate_conditions(
     results: list[ConditionResult] = []
 
     active_adapter = get_active_adapter(conn)
+    policy = get_policy(conn, policy_name) if policy_name else get_active_policy(conn)
 
     max_tokens = max_tokens if max_tokens is not None else config.max_tokens
     temperature = temperature if temperature is not None else config.temperature
     top_p = top_p if top_p is not None else config.top_p
     top_k = top_k if top_k is not None else config.top_k
+    sampling = _resolve_sampling(policy, k, temperature, top_p, top_k, deterministic)
 
     for condition in conditions:
         notes = ""
@@ -98,33 +105,45 @@ def evaluate_conditions(
             learned_unavailable = True
 
         outcomes: list[list[bool]] = []
-        for task in heldout:
-            memory_context = None
-            if (memory_enabled or semantic_enabled) and not baseline_learning:
-                extra_terms = [task.function_name.rsplit("_", 1)[0], task.function_name]
-                memory_context = retrieve_memory(conn, task.prompt, extra_terms=extra_terms)
-                if memory_enabled and not semantic_enabled and memory_context:
-                    memory_context = memory_context.filter_sources({"episode"})
-                if semantic_enabled and not memory_enabled and memory_context:
-                    memory_context = memory_context.filter_sources({"rule", "procedure"})
-            candidates = generate_candidates(
-                backend,
-                task_prompt=task.prompt,
-                function_name=task.function_name,
-                signature=task.signature,
-                memory_context=memory_context,
-                k=k,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                top_p=top_p,
-                top_k=top_k,
-            )
-            task_outcomes: list[bool] = []
-            for cand in candidates:
-                verification = verify_candidate(cand.code, task.reference_tests, task.assert_tests)
-                task_outcomes.append(verification.passed)
-            outcomes.append(task_outcomes)
-        summary = compute_pass_rates(outcomes, k=k)
+        for repeat in range(max(1, repeats)):
+            _seed_backend(backend, seed, repeat, deterministic)
+            for task in heldout:
+                memory_context = None
+                if (memory_enabled or semantic_enabled) and not baseline_learning:
+                    memory_context = retrieve_memory(
+                        conn,
+                        task.prompt,
+                        policy=policy,
+                        function_name=task.function_name,
+                    )
+                    if memory_enabled and not semantic_enabled and memory_context:
+                        memory_context = memory_context.filter_sources({"episode"})
+                    if semantic_enabled and not memory_enabled and memory_context:
+                        memory_context = memory_context.filter_sources({"rule", "procedure"})
+                candidates = generate_candidates(
+                    backend,
+                    task_prompt=task.prompt,
+                    function_name=task.function_name,
+                    signature=task.signature,
+                    memory_context=memory_context,
+                    policy=policy,
+                    k=sampling.k,
+                    max_tokens=max_tokens,
+                    temperature=sampling.temperature,
+                    top_p=sampling.top_p,
+                    top_k=sampling.top_k,
+                )
+                task_outcomes: list[bool] = []
+                for cand in candidates:
+                    verification = verify_candidate(
+                        cand.code,
+                        task.reference_tests,
+                        task.assert_tests,
+                        conn=conn,
+                    )
+                    task_outcomes.append(verification.passed)
+                outcomes.append(task_outcomes)
+        summary = compute_pass_rates(outcomes, k=sampling.k)
         results.append(
             ConditionResult(effective_condition, outcomes, summary, notes, learned_unavailable)
         )
@@ -149,6 +168,9 @@ def evaluate_conditions(
         "run_metadata": {
             "backend": backend_name,
             "model": config.model if backend_name == "openai" else config.hf_model_path or config.model,
+            "policy": policy_name or "active",
+            "deterministic": deterministic,
+            "repeats": repeats,
             "active_adapter": {
                 "name": active_adapter[0],
                 "path": active_adapter[1],
@@ -195,3 +217,21 @@ def _regression_check(conn, active_adapter: tuple[str, str] | None) -> dict:
     if not active_adapter:
         return {"status": "skipped", "reason": "No active adapter"}
     return {"status": "skipped", "reason": "Regression checks require LocalHF mode"}
+
+
+def _resolve_sampling(
+    policy,
+    k: int,
+    temperature: float,
+    top_p: float,
+    top_k: int,
+    deterministic: bool,
+) -> SamplingConfig:
+    if deterministic:
+        return policy.sampling_eval
+    return SamplingConfig(k=k, temperature=temperature, top_p=top_p, top_k=top_k)
+
+
+def _seed_backend(backend, seed: int, repeat: int, deterministic: bool) -> None:
+    if hasattr(backend, "seed"):
+        backend.seed = seed if deterministic else seed + repeat

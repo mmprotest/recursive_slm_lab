@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from ..policy import DEFAULT_POLICY, Policy
 from .migrations import ensure_schema
 
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
@@ -61,6 +62,7 @@ def init_db(db_path: str | Path) -> None:
     schema = SCHEMA_PATH.read_text(encoding="utf-8")
     conn.executescript(schema)
     conn.commit()
+    _ensure_default_policy(conn)
     conn.close()
 
 
@@ -311,3 +313,69 @@ def wipe_memory(conn: sqlite3.Connection) -> None:
     conn.execute("DELETE FROM semantic_rules")
     conn.execute("DELETE FROM procedures")
     conn.commit()
+
+
+def register_policy(
+    conn: sqlite3.Connection,
+    name: str,
+    policy: Policy,
+    parent_policy_name: str | None = None,
+    notes: str | None = None,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO policies (created_at, name, parent_policy_name, policy_json, notes)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (_utc_now(), name, parent_policy_name, policy.to_json(), notes),
+    )
+    conn.commit()
+
+
+def list_policies(conn: sqlite3.Connection) -> list[tuple[str, str, str | None]]:
+    return conn.execute(
+        "SELECT name, created_at, parent_policy_name FROM policies ORDER BY created_at DESC"
+    ).fetchall()
+
+
+def get_policy(conn: sqlite3.Connection, name: str) -> Policy:
+    row = conn.execute(
+        "SELECT policy_json FROM policies WHERE name = ?",
+        (name,),
+    ).fetchone()
+    if not row:
+        raise ValueError(f"Policy '{name}' not found")
+    return Policy.from_json(row[0])
+
+
+def get_active_policy(conn: sqlite3.Connection) -> Policy:
+    row = conn.execute("SELECT policy_name FROM active_policy WHERE singleton = 1").fetchone()
+    if not row:
+        return DEFAULT_POLICY
+    try:
+        return get_policy(conn, row[0])
+    except ValueError:
+        return DEFAULT_POLICY
+
+
+def set_active_policy(conn: sqlite3.Connection, name: str) -> None:
+    conn.execute(
+        """
+        INSERT INTO active_policy (singleton, policy_name, updated_at)
+        VALUES (1, ?, ?)
+        ON CONFLICT(singleton) DO UPDATE SET
+            policy_name = excluded.policy_name,
+            updated_at = excluded.updated_at
+        """,
+        (name, _utc_now()),
+    )
+    conn.commit()
+
+
+def _ensure_default_policy(conn: sqlite3.Connection) -> None:
+    row = conn.execute("SELECT name FROM policies WHERE name = ?", ("default",)).fetchone()
+    if not row:
+        register_policy(conn, "default", DEFAULT_POLICY, parent_policy_name=None, notes="initial")
+    row = conn.execute("SELECT policy_name FROM active_policy WHERE singleton = 1").fetchone()
+    if not row:
+        set_active_policy(conn, "default")

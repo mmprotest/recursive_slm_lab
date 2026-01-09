@@ -14,6 +14,11 @@ from .db import (
     mark_task_seen,
     fetch_seen_task_ids,
     wipe_memory,
+    register_policy,
+    list_policies,
+    get_policy,
+    get_active_policy,
+    set_active_policy,
 )
 from .retrieval import retrieve_memory, MemoryContext
 from .consolidation import consolidate
@@ -35,6 +40,11 @@ __all__ = [
     "mark_task_seen",
     "fetch_seen_task_ids",
     "wipe_memory",
+    "register_policy",
+    "list_policies",
+    "get_policy",
+    "get_active_policy",
+    "set_active_policy",
     "retrieve_memory",
     "MemoryContext",
     "consolidate",

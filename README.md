@@ -16,6 +16,18 @@ The system attempts tasks, verifies candidates with unit tests, stores only pass
 pip install -e .
 ```
 
+For development tools:
+
+```bash
+pip install -e ".[dev]"
+```
+
+Visualization support (plots):
+
+```bash
+pip install -e ".[viz]"
+```
+
 Run the demo:
 
 ```bash
@@ -88,6 +100,7 @@ Adapters cannot be applied in this mode, so the "learned" condition is unavailab
 - `RSLM_TOP_K`: top-k sampling value
 - `RSLM_FAST_VERIFY`: set to `1` to use assert-based fast verification
 - `RSLM_STRICT_VERIFY`: set to `1` to apply tighter verifier limits
+- `RSLM_VERIFY_WORKERS`: parallel verification workers (defaults to a small CPU-based value)
 
 ## CLI overview
 
@@ -99,6 +112,7 @@ rslm consolidate --db artifacts/memory.sqlite --min-evidence 1
 rslm consolidate-llm --db artifacts/memory.sqlite --backend openai --heldout-size 20 --task-limit 20 --sample-episodes 80 --max-rules 20 --min-gain 0.01
 rslm eval --db artifacts/memory.sqlite --backend mock --conditions all --k 1 --heldout-size 20 --task-limit 20 --output artifacts/results_iter001.json
 rslm plot --input artifacts/memory.sqlite --output artifacts/results.png
+rslm policy-list --db artifacts/memory.sqlite
 ```
 
 Note: Typer boolean flags use `--memory-enabled/--no-memory` (no extra `true/false` argument).
@@ -108,7 +122,7 @@ Note: Typer boolean flags use `--memory-enabled/--no-memory` (no extra `true/fal
 Regenerate the bundled task set with deterministic, hidden pytest tests:
 
 ```bash
-rslm seed-tasks --regen --count 200
+rslm seed-tasks --regen --regen-families --count 200
 ```
 
 Then run a short iteration and evaluation:
@@ -119,6 +133,36 @@ rslm eval --db artifacts/memory.sqlite --backend mock --conditions all --k 1 --h
 ```
 
 Task tests are stored only in the verifier and are not exposed to the model prompts.
+
+## Recursive self-improvement (policy loop)
+
+This repo uses a first-class `Policy` layer that controls prompts, retrieval, sampling, and consolidation settings.
+Recursive self-improvement means the system proposes policy updates, evaluates them on heldout/regression gates, and
+automatically activates a candidate only if it wins without regressions.
+
+Minimal meta-loop demo (mock backend):
+
+```bash
+rslm init-db --db artifacts/memory.sqlite
+rslm seed-tasks --regen --regen-families --count 200
+rslm run-iteration --db artifacts/memory.sqlite --backend mock --memory-enabled --heldout-size 20 --task-limit 20
+rslm policy-run-meta-iteration --db artifacts/memory.sqlite --backend mock --heldout-size 20 --regression-size 25 --repeats 3
+```
+
+LocalHF meta-loop (with adapters available):
+
+```bash
+pip install -e ".[localhf]"
+export RSLM_BACKEND=localhf
+export RSLM_HF_MODEL_ID=Qwen/Qwen3-4B-Thinking-2507
+rslm policy-run-meta-iteration --db artifacts/memory.sqlite --backend localhf --heldout-size 40 --regression-size 25 --repeats 3
+```
+
+## Determinism defaults
+
+Promotion gates run deterministically by default (temperature 0, k=1, repeats>=3) to prevent random wins.
+Use `--stochastic` and a higher `--repeats` on `rslm eval`, `rslm train-and-promote`, or `rslm policy-run-meta-iteration`
+to enable exploratory sampling.
 
 ## OpenAI-compatible backend
 
@@ -139,7 +183,7 @@ The client uses the `chat.completions` API and works with OpenAI-compatible serv
 Install optional dependencies and provide a local model id:
 
 ```bash
-pip install -e .[localhf,train]
+pip install -e ".[localhf,train]"
 export RSLM_HF_MODEL_ID=Qwen/Qwen3-4B-Thinking-2507
 rslm train-lora --db artifacts/memory.sqlite --out adapters/adapter_v001
 ```

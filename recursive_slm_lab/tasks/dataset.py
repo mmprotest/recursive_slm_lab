@@ -14,6 +14,8 @@ class Task:
     function_name: str
     signature: str
     reference_tests: str
+    category: str
+    difficulty: int
     assert_tests: list[str] | None = None
     tags: list[str] | None = None
 
@@ -29,6 +31,8 @@ def load_tasks(path: Path | str = BUNDLED_PATH) -> list[Task]:
             if not line.strip():
                 continue
             payload = json.loads(line)
+            payload.setdefault("category", "uncategorized")
+            payload.setdefault("difficulty", 1)
             tasks.append(Task(**payload))
     return tasks
 
@@ -47,10 +51,24 @@ def validate_tasks(tasks: Iterable[Task]) -> None:
             raise ValueError(f"reference_tests missing pytest usage for {task.task_id}")
         if not task.assert_tests:
             raise ValueError(f"assert_tests missing for {task.task_id}")
+        if not task.category:
+            raise ValueError(f"category missing for {task.task_id}")
+        if task.difficulty < 1:
+            raise ValueError(f"difficulty invalid for {task.task_id}")
 
 
-def split_tasks(tasks: list[Task], heldout_size: int, seed: int = 1337) -> tuple[list[Task], list[Task]]:
-    heldout_only = [task for task in tasks if task.tags and "heldout_only" in task.tags]
+def split_tasks(
+    tasks: list[Task],
+    heldout_size: int,
+    seed: int = 1337,
+    heldout_categories: set[str] | None = None,
+) -> tuple[list[Task], list[Task]]:
+    heldout_categories = heldout_categories or {"parsing"}
+    heldout_only = [
+        task
+        for task in tasks
+        if (task.tags and "heldout_only" in task.tags) or task.category in heldout_categories
+    ]
     remaining = [task for task in tasks if task not in heldout_only]
     hashed = []
     for task in remaining:

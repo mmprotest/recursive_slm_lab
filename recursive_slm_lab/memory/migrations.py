@@ -60,6 +60,50 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS policies (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT NOT NULL,
+            name TEXT NOT NULL UNIQUE,
+            parent_policy_name TEXT,
+            policy_json TEXT NOT NULL,
+            notes TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS active_policy (
+            singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+            policy_name TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS policy_promotions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT NOT NULL,
+            previous_policy_name TEXT,
+            candidate_policy_name TEXT,
+            decision TEXT NOT NULL,
+            metrics_json TEXT NOT NULL,
+            notes TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS verification_cache (
+            key TEXT PRIMARY KEY,
+            passed INTEGER NOT NULL,
+            log TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
 
     if _table_exists(conn, "episodes"):
         if not _column_exists(conn, "episodes", "run_id"):

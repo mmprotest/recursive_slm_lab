@@ -34,6 +34,8 @@ def _make_task(
     signature: str,
     reference_tests: str,
     assert_tests: list[str],
+    category: str = "misc",
+    difficulty: int = 1,
     tags: list[str] | None = None,
 ) -> dict[str, str | list[str]]:
     payload: dict[str, str | list[str]] = {
@@ -42,6 +44,8 @@ def _make_task(
         "function_name": function_name,
         "signature": signature,
         "reference_tests": reference_tests,
+        "category": category,
+        "difficulty": difficulty,
         "assert_tests": assert_tests,
     }
     if tags:
@@ -78,7 +82,7 @@ def _add_const_task(k: int) -> dict[str, str | list[str]]:
         f"assert {function_name}(5) == {5 + k}",
         f"assert {function_name}(-3) == {-3 + k}",
     ]
-    return _make_task(prompt, function_name, "(n)", reference_tests, assert_tests)
+    return _make_task(prompt, function_name, "(n)", reference_tests, assert_tests, category="math", difficulty=1)
 
 
 def _mul_const_task(k: int) -> dict[str, str | list[str]]:
@@ -110,7 +114,7 @@ def _mul_const_task(k: int) -> dict[str, str | list[str]]:
         f"assert {function_name}(3) == {3 * k}",
         f"assert {function_name}(-2) == {-2 * k}",
     ]
-    return _make_task(prompt, function_name, "(n)", reference_tests, assert_tests)
+    return _make_task(prompt, function_name, "(n)", reference_tests, assert_tests, category="math", difficulty=1)
 
 
 def _rotate_left_task() -> dict[str, str | list[str]]:
@@ -145,7 +149,7 @@ def _rotate_left_task() -> dict[str, str | list[str]]:
         "assert rotate_left([1, 2, 3]) == [2, 3, 1]",
         "assert rotate_left([]) == []",
     ]
-    return _make_task(prompt, "rotate_left", "(values)", reference_tests, assert_tests)
+    return _make_task(prompt, "rotate_left", "(values)", reference_tests, assert_tests, category="lists", difficulty=1)
 
 
 def _is_palindrome_alnum_task() -> dict[str, str | list[str]]:
@@ -184,7 +188,9 @@ def _is_palindrome_alnum_task() -> dict[str, str | list[str]]:
         "assert is_palindrome_alnum('A man, a plan, a canal, Panama!') is True",
         "assert is_palindrome_alnum('Hello') is False",
     ]
-    return _make_task(prompt, "is_palindrome_alnum", "(text)", reference_tests, assert_tests)
+    return _make_task(
+        prompt, "is_palindrome_alnum", "(text)", reference_tests, assert_tests, category="strings", difficulty=2
+    )
 
 
 def _two_sum_indices_task() -> dict[str, str | list[str]]:
@@ -239,7 +245,9 @@ def _two_sum_indices_task() -> dict[str, str | list[str]]:
         "assert two_sum_indices([2, 7, 11, 15], 9) == (0, 1)",
         "assert two_sum_indices([1, 2, 3], 99) == (-1, -1)",
     ]
-    return _make_task(prompt, "two_sum_indices", "(nums, target)", reference_tests, assert_tests)
+    return _make_task(
+        prompt, "two_sum_indices", "(nums, target)", reference_tests, assert_tests, category="algorithms", difficulty=2
+    )
 
 
 def _clamp_task() -> dict[str, str | list[str]]:
@@ -271,7 +279,146 @@ def _clamp_task() -> dict[str, str | list[str]]:
         "assert clamp(-1, 0, 3) == 0",
         "assert clamp(2, 0, 3) == 2",
     ]
-    return _make_task(prompt, "clamp", "(x, lo, hi)", reference_tests, assert_tests)
+    return _make_task(prompt, "clamp", "(x, lo, hi)", reference_tests, assert_tests, category="math", difficulty=1)
+
+
+def _gcd_task() -> dict[str, str | list[str]]:
+    prompt = "Return the greatest common divisor (GCD) of two integers."
+    reference_tests = textwrap.dedent(
+        """
+        import pytest
+        import random
+        from solution import *
+
+
+        def oracle(a, b):
+            a, b = abs(a), abs(b)
+            while b:
+                a, b = b, a % b
+            return a
+
+
+        def test_examples():
+            assert gcd_value(12, 18) == 6
+            assert gcd_value(-10, 5) == 5
+
+
+        def test_randomized():
+            random.seed(1901)
+            for _ in range(60):
+                a = random.randint(-50, 50)
+                b = random.randint(-50, 50)
+                assert gcd_value(a, b) == oracle(a, b)
+        """
+    ).strip()
+    assert_tests = [
+        "assert gcd_value(12, 18) == 6",
+        "assert gcd_value(-10, 5) == 5",
+    ]
+    return _make_task(
+        prompt,
+        "gcd_value",
+        "(a, b)",
+        reference_tests,
+        assert_tests,
+        category="math",
+        difficulty=2,
+    )
+
+
+def _lcm_task() -> dict[str, str | list[str]]:
+    prompt = "Return the least common multiple (LCM) of two integers."
+    reference_tests = textwrap.dedent(
+        """
+        import pytest
+        import random
+        from solution import *
+
+
+        def gcd(a, b):
+            a, b = abs(a), abs(b)
+            while b:
+                a, b = b, a % b
+            return a
+
+
+        def oracle(a, b):
+            if a == 0 or b == 0:
+                return 0
+            return abs(a * b) // gcd(a, b)
+
+
+        def test_examples():
+            assert lcm_value(4, 6) == 12
+            assert lcm_value(0, 5) == 0
+
+
+        def test_randomized():
+            random.seed(1902)
+            for _ in range(60):
+                a = random.randint(-20, 20)
+                b = random.randint(-20, 20)
+                assert lcm_value(a, b) == oracle(a, b)
+        """
+    ).strip()
+    assert_tests = [
+        "assert lcm_value(4, 6) == 12",
+        "assert lcm_value(0, 5) == 0",
+    ]
+    return _make_task(
+        prompt,
+        "lcm_value",
+        "(a, b)",
+        reference_tests,
+        assert_tests,
+        category="math",
+        difficulty=2,
+    )
+
+
+def _piecewise_task() -> dict[str, str | list[str]]:
+    prompt = "Return x*x if x < 0, return x if 0 <= x <= 10, else return 10."
+    reference_tests = textwrap.dedent(
+        """
+        import pytest
+        import random
+        from solution import *
+
+
+        def oracle(x):
+            if x < 0:
+                return x * x
+            if x <= 10:
+                return x
+            return 10
+
+
+        def test_examples():
+            assert piecewise_value(-3) == 9
+            assert piecewise_value(5) == 5
+            assert piecewise_value(12) == 10
+
+
+        def test_randomized():
+            random.seed(1903)
+            for _ in range(50):
+                x = random.randint(-10, 20)
+                assert piecewise_value(x) == oracle(x)
+        """
+    ).strip()
+    assert_tests = [
+        "assert piecewise_value(-3) == 9",
+        "assert piecewise_value(12) == 10",
+    ]
+    return _make_task(
+        prompt,
+        "piecewise_value",
+        "(x)",
+        reference_tests,
+        assert_tests,
+        category="math",
+        difficulty=1,
+    )
 
 
 def _dedupe_preserve_task() -> dict[str, str | list[str]]:
@@ -311,7 +458,9 @@ def _dedupe_preserve_task() -> dict[str, str | list[str]]:
         "assert dedupe_preserve([1, 2, 1, 3, 2]) == [1, 2, 3]",
         "assert dedupe_preserve([]) == []",
     ]
-    return _make_task(prompt, "dedupe_preserve", "(values)", reference_tests, assert_tests)
+    return _make_task(
+        prompt, "dedupe_preserve", "(values)", reference_tests, assert_tests, category="lists", difficulty=1
+    )
 
 
 def _parse_int_list_task() -> dict[str, str | list[str]]:
@@ -360,7 +509,58 @@ def _parse_int_list_task() -> dict[str, str | list[str]]:
         "assert parse_int_list('  -1  4   5 ') == [-1, 4, 5]",
         "assert parse_int_list('') == []",
     ]
-    return _make_task(prompt, "parse_int_list", "(text)", reference_tests, assert_tests)
+    return _make_task(prompt, "parse_int_list", "(text)", reference_tests, assert_tests, category="parsing", difficulty=1)
+
+
+def _flatten_one_level_task() -> dict[str, str | list[str]]:
+    prompt = "Flatten a list by one level (if an element is a list, extend it; otherwise keep it)."
+    reference_tests = textwrap.dedent(
+        """
+        import pytest
+        import random
+        from solution import *
+
+
+        def oracle(values):
+            flattened = []
+            for item in values:
+                if isinstance(item, list):
+                    flattened.extend(item)
+                else:
+                    flattened.append(item)
+            return flattened
+
+
+        def test_examples():
+            assert flatten_one_level([1, [2, 3], 4]) == [1, 2, 3, 4]
+            assert flatten_one_level([]) == []
+
+
+        def test_randomized():
+            random.seed(1801)
+            for _ in range(50):
+                values = []
+                for _ in range(random.randint(0, 8)):
+                    if random.random() < 0.4:
+                        values.append([random.randint(0, 5) for _ in range(random.randint(0, 4))])
+                    else:
+                        values.append(random.randint(0, 5))
+                assert flatten_one_level(values) == oracle(values)
+        """
+    ).strip()
+    assert_tests = [
+        "assert flatten_one_level([1, [2, 3], 4]) == [1, 2, 3, 4]",
+        "assert flatten_one_level([]) == []",
+    ]
+    return _make_task(
+        prompt,
+        "flatten_one_level",
+        "(values)",
+        reference_tests,
+        assert_tests,
+        category="lists",
+        difficulty=2,
+    )
 
 
 def _max_subarray_sum_task() -> dict[str, str | list[str]]:
@@ -404,7 +604,9 @@ def _max_subarray_sum_task() -> dict[str, str | list[str]]:
         "assert max_subarray_sum([-5, -1, -3]) == -1",
         "assert max_subarray_sum([]) == 0",
     ]
-    return _make_task(prompt, "max_subarray_sum", "(values)", reference_tests, assert_tests)
+    return _make_task(
+        prompt, "max_subarray_sum", "(values)", reference_tests, assert_tests, category="algorithms", difficulty=2
+    )
 
 
 def _bfs_distance_task() -> dict[str, str | list[str]]:
@@ -464,7 +666,15 @@ def _bfs_distance_task() -> dict[str, str | list[str]]:
         "assert bfs_distance({0: [1, 2], 1: [2], 2: [3], 3: []}, 3, 0) == -1",
         "assert bfs_distance({0: [1], 1: []}, 0, 0) == 0",
     ]
-    return _make_task(prompt, "bfs_distance", "(graph, start, goal)", reference_tests, assert_tests)
+    return _make_task(
+        prompt,
+        "bfs_distance",
+        "(graph, start, goal)",
+        reference_tests,
+        assert_tests,
+        category="algorithms",
+        difficulty=3,
+    )
 
 
 def _parse_date_iso_task() -> dict[str, str | list[str]]:
@@ -511,7 +721,84 @@ def _parse_date_iso_task() -> dict[str, str | list[str]]:
         "assert normalize_date('2024/3/5') == '2024-03-05'",
         "assert normalize_date('1999-12-1') == '1999-12-01'",
     ]
-    return _make_task(prompt, "normalize_date", "(text)", reference_tests, assert_tests, tags=["heldout_only"])
+    return _make_task(
+        prompt,
+        "normalize_date",
+        "(text)",
+        reference_tests,
+        assert_tests,
+        category="parsing",
+        difficulty=1,
+        tags=["heldout_only"],
+    )
+
+
+def _invert_mapping_task() -> dict[str, str | list[str]]:
+    prompt = "Invert a dict so values map to sorted lists of keys. Ignore None values."
+    reference_tests = textwrap.dedent(
+        """
+        import pytest
+        from solution import *
+
+
+        def oracle(mapping):
+            inverted = {}
+            for key, value in mapping.items():
+                if value is None:
+                    continue
+                inverted.setdefault(value, []).append(key)
+            for value in inverted:
+                inverted[value].sort()
+            return inverted
+
+
+        def test_examples():
+            assert invert_mapping({"a": 1, "b": 1, "c": 2}) == {1: ["a", "b"], 2: ["c"]}
+            assert invert_mapping({}) == {}
+            assert invert_mapping({"x": None}) == {}
+        """
+    ).strip()
+    assert_tests = [
+        "assert invert_mapping({'a': 1, 'b': 1, 'c': 2}) == {1: ['a', 'b'], 2: ['c']}",
+        "assert invert_mapping({}) == {}",
+    ]
+    return _make_task(
+        prompt,
+        "invert_mapping",
+        "(mapping)",
+        reference_tests,
+        assert_tests,
+        category="dicts",
+        difficulty=2,
+    )
+
+
+def _merge_with_precedence_task() -> dict[str, str | list[str]]:
+    prompt = "Merge two dicts; values from the second dict override the first."
+    reference_tests = textwrap.dedent(
+        """
+        import pytest
+        from solution import *
+
+
+        def test_examples():
+            assert merge_with_precedence({"a": 1, "b": 2}, {"b": 3, "c": 4}) == {"a": 1, "b": 3, "c": 4}
+            assert merge_with_precedence({}, {"x": 1}) == {"x": 1}
+        """
+    ).strip()
+    assert_tests = [
+        "assert merge_with_precedence({'a': 1, 'b': 2}, {'b': 3, 'c': 4}) == {'a': 1, 'b': 3, 'c': 4}",
+        "assert merge_with_precedence({}, {'x': 1}) == {'x': 1}",
+    ]
+    return _make_task(
+        prompt,
+        "merge_with_precedence",
+        "(first, second)",
+        reference_tests,
+        assert_tests,
+        category="dicts",
+        difficulty=1,
+    )
 
 
 def _parse_key_value_task() -> dict[str, str | list[str]]:
@@ -532,7 +819,16 @@ def _parse_key_value_task() -> dict[str, str | list[str]]:
         "assert parse_kv_pairs('a=1,b=2') == {'a': 1, 'b': 2}",
         "assert parse_kv_pairs('') == {}",
     ]
-    return _make_task(prompt, "parse_kv_pairs", "(text)", reference_tests, assert_tests, tags=["heldout_only"])
+    return _make_task(
+        prompt,
+        "parse_kv_pairs",
+        "(text)",
+        reference_tests,
+        assert_tests,
+        category="parsing",
+        difficulty=1,
+        tags=["heldout_only"],
+    )
 
 
 def _parse_csv_row_task() -> dict[str, str | list[str]]:
@@ -553,7 +849,41 @@ def _parse_csv_row_task() -> dict[str, str | list[str]]:
         "assert parse_csv_row('a,b,c') == ['a', 'b', 'c']",
         "assert parse_csv_row(' 1, 2 ,3 ') == ['1', '2', '3']",
     ]
-    return _make_task(prompt, "parse_csv_row", "(text)", reference_tests, assert_tests)
+    return _make_task(prompt, "parse_csv_row", "(text)", reference_tests, assert_tests, category="parsing", difficulty=1)
+
+
+def _parse_csv_quoted_task() -> dict[str, str | list[str]]:
+    prompt = "Parse a CSV row that may include quoted commas. Return a list of fields."
+    reference_tests = textwrap.dedent(
+        """
+        import pytest
+        import csv
+        from solution import *
+
+
+        def oracle(text):
+            return next(csv.reader([text]))
+
+
+        def test_examples():
+            assert parse_csv_quoted('a,"b,c",d') == ["a", "b,c", "d"]
+            assert parse_csv_quoted('"x""y",z') == ['x"y', "z"]
+        """
+    ).strip()
+    assert_tests = [
+        "assert parse_csv_quoted('a,\"b,c\",d') == ['a', 'b,c', 'd']",
+        "assert parse_csv_quoted('\"x\"\"y\",z') == ['x\"y', 'z']",
+    ]
+    return _make_task(
+        prompt,
+        "parse_csv_quoted",
+        "(text)",
+        reference_tests,
+        assert_tests,
+        category="parsing",
+        difficulty=3,
+        tags=["heldout_only"],
+    )
 
 
 def _parse_env_block_task() -> dict[str, str | list[str]]:
@@ -574,7 +904,16 @@ def _parse_env_block_task() -> dict[str, str | list[str]]:
         "assert parse_env_block('HOST=localhost\\nPORT=8080') == {'HOST': 'localhost', 'PORT': '8080'}",
         "assert parse_env_block('') == {}",
     ]
-    return _make_task(prompt, "parse_env_block", "(text)", reference_tests, assert_tests, tags=["heldout_only"])
+    return _make_task(
+        prompt,
+        "parse_env_block",
+        "(text)",
+        reference_tests,
+        assert_tests,
+        category="parsing",
+        difficulty=2,
+        tags=["heldout_only"],
+    )
 
 
 def _parse_range_list_task() -> dict[str, str | list[str]]:
@@ -595,7 +934,16 @@ def _parse_range_list_task() -> dict[str, str | list[str]]:
         "assert parse_ranges('1-3,5,7-8') == [1, 2, 3, 5, 7, 8]",
         "assert parse_ranges('') == []",
     ]
-    return _make_task(prompt, "parse_ranges", "(text)", reference_tests, assert_tests, tags=["heldout_only"])
+    return _make_task(
+        prompt,
+        "parse_ranges",
+        "(text)",
+        reference_tests,
+        assert_tests,
+        category="parsing",
+        difficulty=2,
+        tags=["heldout_only"],
+    )
 
 
 def _parse_bool_tokens_task() -> dict[str, str | list[str]]:
@@ -615,7 +963,9 @@ def _parse_bool_tokens_task() -> dict[str, str | list[str]]:
         "assert parse_bool_tokens('true,false,1,0') == [True, False, True, False]",
         "assert parse_bool_tokens('yes, no, TRUE') == [True, False, True]",
     ]
-    return _make_task(prompt, "parse_bool_tokens", "(text)", reference_tests, assert_tests)
+    return _make_task(
+        prompt, "parse_bool_tokens", "(text)", reference_tests, assert_tests, category="parsing", difficulty=1
+    )
 
 
 def _parse_int_matrix_task() -> dict[str, str | list[str]]:
@@ -636,7 +986,9 @@ def _parse_int_matrix_task() -> dict[str, str | list[str]]:
         "assert parse_int_matrix('1,2;3,4') == [[1, 2], [3, 4]]",
         "assert parse_int_matrix('') == []",
     ]
-    return _make_task(prompt, "parse_int_matrix", "(text)", reference_tests, assert_tests)
+    return _make_task(
+        prompt, "parse_int_matrix", "(text)", reference_tests, assert_tests, category="parsing", difficulty=2
+    )
 
 
 def _normalize_whitespace_task() -> dict[str, str | list[str]]:
@@ -656,7 +1008,9 @@ def _normalize_whitespace_task() -> dict[str, str | list[str]]:
         "assert normalize_whitespace('  hello   world ') == 'hello world'",
         "assert normalize_whitespace('\\n\\tfoo\\tbar  ') == 'foo bar'",
     ]
-    return _make_task(prompt, "normalize_whitespace", "(text)", reference_tests, assert_tests)
+    return _make_task(
+        prompt, "normalize_whitespace", "(text)", reference_tests, assert_tests, category="strings", difficulty=1
+    )
 
 
 def _parse_duration_minutes_task() -> dict[str, str | list[str]]:
@@ -677,7 +1031,16 @@ def _parse_duration_minutes_task() -> dict[str, str | list[str]]:
         "assert duration_to_minutes('2h 30m') == 150",
         "assert duration_to_minutes('45m') == 45",
     ]
-    return _make_task(prompt, "duration_to_minutes", "(text)", reference_tests, assert_tests, tags=["heldout_only"])
+    return _make_task(
+        prompt,
+        "duration_to_minutes",
+        "(text)",
+        reference_tests,
+        assert_tests,
+        category="parsing",
+        difficulty=2,
+        tags=["heldout_only"],
+    )
 
 
 def _parse_scored_pairs_task() -> dict[str, str | list[str]]:
@@ -697,7 +1060,9 @@ def _parse_scored_pairs_task() -> dict[str, str | list[str]]:
         "assert parse_scored_pairs('ann:1,bob:3') == {'ann': 1, 'bob': 3}",
         "assert parse_scored_pairs('') == {}",
     ]
-    return _make_task(prompt, "parse_scored_pairs", "(text)", reference_tests, assert_tests)
+    return _make_task(
+        prompt, "parse_scored_pairs", "(text)", reference_tests, assert_tests, category="parsing", difficulty=1
+    )
 
 
 def _merge_intervals_task() -> dict[str, str | list[str]]:
@@ -743,7 +1108,16 @@ def _merge_intervals_task() -> dict[str, str | list[str]]:
         "assert merge_intervals([[1, 3], [2, 4], [6, 8]]) == [[1, 4], [6, 8]]",
         "assert merge_intervals([]) == []",
     ]
-    return _make_task(prompt, "merge_intervals", "(intervals)", reference_tests, assert_tests, tags=["heldout_only"])
+    return _make_task(
+        prompt,
+        "merge_intervals",
+        "(intervals)",
+        reference_tests,
+        assert_tests,
+        category="algorithms",
+        difficulty=3,
+        tags=["heldout_only"],
+    )
 
 
 def _run_length_encode_task() -> dict[str, str | list[str]]:
@@ -763,7 +1137,9 @@ def _run_length_encode_task() -> dict[str, str | list[str]]:
         "assert run_length_encode('aaabb') == [('a', 3), ('b', 2)]",
         "assert run_length_encode('') == []",
     ]
-    return _make_task(prompt, "run_length_encode", "(text)", reference_tests, assert_tests)
+    return _make_task(
+        prompt, "run_length_encode", "(text)", reference_tests, assert_tests, category="strings", difficulty=2
+    )
 
 
 def _run_length_decode_task() -> dict[str, str | list[str]]:
@@ -783,7 +1159,9 @@ def _run_length_decode_task() -> dict[str, str | list[str]]:
         "assert run_length_decode([('a', 3), ('b', 2)]) == 'aaabb'",
         "assert run_length_decode([]) == ''",
     ]
-    return _make_task(prompt, "run_length_decode", "(pairs)", reference_tests, assert_tests)
+    return _make_task(
+        prompt, "run_length_decode", "(pairs)", reference_tests, assert_tests, category="strings", difficulty=2
+    )
 
 
 def _sliding_window_max_sum_task() -> dict[str, str | list[str]]:
@@ -820,7 +1198,9 @@ def _sliding_window_max_sum_task() -> dict[str, str | list[str]]:
         "assert max_window_sum([1, 2, 3, 4], 2) == 7",
         "assert max_window_sum([1, 2], 3) is None",
     ]
-    return _make_task(prompt, "max_window_sum", "(values, k)", reference_tests, assert_tests)
+    return _make_task(
+        prompt, "max_window_sum", "(values, k)", reference_tests, assert_tests, category="lists", difficulty=2
+    )
 
 
 def _longest_common_prefix_task() -> dict[str, str | list[str]]:
@@ -841,7 +1221,9 @@ def _longest_common_prefix_task() -> dict[str, str | list[str]]:
         "assert longest_common_prefix(['flower', 'flow', 'flight']) == 'fl'",
         "assert longest_common_prefix([]) == ''",
     ]
-    return _make_task(prompt, "longest_common_prefix", "(words)", reference_tests, assert_tests)
+    return _make_task(
+        prompt, "longest_common_prefix", "(words)", reference_tests, assert_tests, category="algorithms", difficulty=1
+    )
 
 
 def _prefix_sums_task() -> dict[str, str | list[str]]:
@@ -861,7 +1243,7 @@ def _prefix_sums_task() -> dict[str, str | list[str]]:
         "assert prefix_sums([1, 2, 3]) == [1, 3, 6]",
         "assert prefix_sums([]) == []",
     ]
-    return _make_task(prompt, "prefix_sums", "(values)", reference_tests, assert_tests)
+    return _make_task(prompt, "prefix_sums", "(values)", reference_tests, assert_tests, category="lists", difficulty=1)
 
 
 def _chunk_list_task() -> dict[str, str | list[str]]:
@@ -881,7 +1263,7 @@ def _chunk_list_task() -> dict[str, str | list[str]]:
         "assert chunk_list([1, 2, 3, 4, 5], 2) == [[1, 2], [3, 4], [5]]",
         "assert chunk_list([], 3) == []",
     ]
-    return _make_task(prompt, "chunk_list", "(values, n)", reference_tests, assert_tests)
+    return _make_task(prompt, "chunk_list", "(values, n)", reference_tests, assert_tests, category="lists", difficulty=1)
 
 
 def _rotate_right_task() -> dict[str, str | list[str]]:
@@ -901,7 +1283,9 @@ def _rotate_right_task() -> dict[str, str | list[str]]:
         "assert rotate_right([1, 2, 3, 4], 1) == [4, 1, 2, 3]",
         "assert rotate_right([], 3) == []",
     ]
-    return _make_task(prompt, "rotate_right", "(values, k)", reference_tests, assert_tests)
+    return _make_task(
+        prompt, "rotate_right", "(values, k)", reference_tests, assert_tests, category="lists", difficulty=1
+    )
 
 
 def _k_smallest_task() -> dict[str, str | list[str]]:
@@ -931,7 +1315,7 @@ def _k_smallest_task() -> dict[str, str | list[str]]:
         "assert k_smallest([5, 1, 3, 2], 2) == [1, 2]",
         "assert k_smallest([], 3) == []",
     ]
-    return _make_task(prompt, "k_smallest", "(values, k)", reference_tests, assert_tests)
+    return _make_task(prompt, "k_smallest", "(values, k)", reference_tests, assert_tests, category="lists", difficulty=2)
 
 
 def _bugfix_is_sorted_task() -> dict[str, str | list[str]]:
@@ -952,7 +1336,16 @@ def _bugfix_is_sorted_task() -> dict[str, str | list[str]]:
         "assert is_sorted([1, 2, 2, 3]) is True",
         "assert is_sorted([3, 2, 1]) is False",
     ]
-    return _make_task(prompt, "is_sorted", "(values)", reference_tests, assert_tests, tags=["heldout_only"])
+    return _make_task(
+        prompt,
+        "is_sorted",
+        "(values)",
+        reference_tests,
+        assert_tests,
+        category="lists",
+        difficulty=2,
+        tags=["heldout_only"],
+    )
 
 
 def _bugfix_count_words_task() -> dict[str, str | list[str]]:
@@ -972,7 +1365,7 @@ def _bugfix_count_words_task() -> dict[str, str | list[str]]:
         "assert count_words('hello   world') == 2",
         "assert count_words('  a\\t b\\n c ') == 3",
     ]
-    return _make_task(prompt, "count_words", "(text)", reference_tests, assert_tests)
+    return _make_task(prompt, "count_words", "(text)", reference_tests, assert_tests, category="strings", difficulty=1)
 
 
 def _bugfix_title_case_task() -> dict[str, str | list[str]]:
@@ -992,7 +1385,7 @@ def _bugfix_title_case_task() -> dict[str, str | list[str]]:
         "assert title_case('hello world') == 'Hello World'",
         "assert title_case('state-of-the-art') == 'State-Of-The-Art'",
     ]
-    return _make_task(prompt, "title_case", "(text)", reference_tests, assert_tests)
+    return _make_task(prompt, "title_case", "(text)", reference_tests, assert_tests, category="strings", difficulty=2)
 
 
 def _bugfix_unique_chars_task() -> dict[str, str | list[str]]:
@@ -1012,7 +1405,16 @@ def _bugfix_unique_chars_task() -> dict[str, str | list[str]]:
         "assert unique_chars('AaBb') == ['a', 'b']",
         "assert unique_chars('') == []",
     ]
-    return _make_task(prompt, "unique_chars", "(text)", reference_tests, assert_tests, tags=["heldout_only"])
+    return _make_task(
+        prompt,
+        "unique_chars",
+        "(text)",
+        reference_tests,
+        assert_tests,
+        category="strings",
+        difficulty=2,
+        tags=["heldout_only"],
+    )
 
 
 def _bugfix_balance_parens_task() -> dict[str, str | list[str]]:
@@ -1033,7 +1435,16 @@ def _bugfix_balance_parens_task() -> dict[str, str | list[str]]:
         "assert balance_parens('(a)b') is True",
         "assert balance_parens('(()') is False",
     ]
-    return _make_task(prompt, "balance_parens", "(text)", reference_tests, assert_tests, tags=["heldout_only"])
+    return _make_task(
+        prompt,
+        "balance_parens",
+        "(text)",
+        reference_tests,
+        assert_tests,
+        category="algorithms",
+        difficulty=2,
+        tags=["heldout_only"],
+    )
 
 
 def _bugfix_median_task() -> dict[str, str | list[str]]:
@@ -1053,7 +1464,16 @@ def _bugfix_median_task() -> dict[str, str | list[str]]:
         "assert median([1, 2, 3]) == 2",
         "assert median([1, 2, 3, 4]) == 2.5",
     ]
-    return _make_task(prompt, "median", "(values)", reference_tests, assert_tests, tags=["heldout_only"])
+    return _make_task(
+        prompt,
+        "median",
+        "(values)",
+        reference_tests,
+        assert_tests,
+        category="math",
+        difficulty=2,
+        tags=["heldout_only"],
+    )
 
 
 def _max_pair_sum_task() -> dict[str, str | list[str]]:
@@ -1094,7 +1514,9 @@ def _max_pair_sum_task() -> dict[str, str | list[str]]:
         "assert max_pair_sum([1, 2, 3]) == 5",
         "assert max_pair_sum([5]) is None",
     ]
-    return _make_task(prompt, "max_pair_sum", "(values)", reference_tests, assert_tests)
+    return _make_task(
+        prompt, "max_pair_sum", "(values)", reference_tests, assert_tests, category="lists", difficulty=2
+    )
 
 
 def _first_duplicate_task() -> dict[str, str | list[str]]:
@@ -1114,7 +1536,9 @@ def _first_duplicate_task() -> dict[str, str | list[str]]:
         "assert first_duplicate([1, 2, 3, 2, 1]) == 2",
         "assert first_duplicate([1, 2, 3]) is None",
     ]
-    return _make_task(prompt, "first_duplicate", "(values)", reference_tests, assert_tests)
+    return _make_task(
+        prompt, "first_duplicate", "(values)", reference_tests, assert_tests, category="lists", difficulty=2
+    )
 
 
 def _min_subarray_len_task() -> dict[str, str | list[str]]:
@@ -1158,7 +1582,15 @@ def _min_subarray_len_task() -> dict[str, str | list[str]]:
         "assert min_subarray_len([2, 3, 1, 2, 4, 3], 7) == 2",
         "assert min_subarray_len([1, 1, 1], 5) == 0",
     ]
-    return _make_task(prompt, "min_subarray_len", "(values, target)", reference_tests, assert_tests)
+    return _make_task(
+        prompt,
+        "min_subarray_len",
+        "(values, target)",
+        reference_tests,
+        assert_tests,
+        category="algorithms",
+        difficulty=3,
+    )
 
 
 def _longest_run_task() -> dict[str, str | list[str]]:
@@ -1178,7 +1610,9 @@ def _longest_run_task() -> dict[str, str | list[str]]:
         "assert longest_run([1, 1, 2, 2, 2, 3]) == 3",
         "assert longest_run([]) == 0",
     ]
-    return _make_task(prompt, "longest_run", "(values)", reference_tests, assert_tests)
+    return _make_task(
+        prompt, "longest_run", "(values)", reference_tests, assert_tests, category="lists", difficulty=1
+    )
 
 
 def _find_peak_task() -> dict[str, str | list[str]]:
@@ -1212,7 +1646,9 @@ def _find_peak_task() -> dict[str, str | list[str]]:
         "assert find_peak([1, 3, 2]) in {3}",
         "assert find_peak([]) is None",
     ]
-    return _make_task(prompt, "find_peak", "(values)", reference_tests, assert_tests)
+    return _make_task(
+        prompt, "find_peak", "(values)", reference_tests, assert_tests, category="algorithms", difficulty=2
+    )
 
 
 def _window_distinct_count_task() -> dict[str, str | list[str]]:
@@ -1232,7 +1668,15 @@ def _window_distinct_count_task() -> dict[str, str | list[str]]:
         "assert window_distinct_counts([1, 2, 1, 3, 2], 3) == [2, 3, 3]",
         "assert window_distinct_counts([1, 1, 1], 2) == [1, 1]",
     ]
-    return _make_task(prompt, "window_distinct_counts", "(values, k)", reference_tests, assert_tests)
+    return _make_task(
+        prompt,
+        "window_distinct_counts",
+        "(values, k)",
+        reference_tests,
+        assert_tests,
+        category="lists",
+        difficulty=2,
+    )
 
 
 def _interleave_range(start: int, stop: int) -> list[int]:
@@ -1249,13 +1693,20 @@ def generate_tasks(count: int) -> list[dict[str, str | list[str]]]:
         _is_palindrome_alnum_task(),
         _two_sum_indices_task(),
         _clamp_task(),
+        _gcd_task(),
+        _lcm_task(),
+        _piecewise_task(),
         _dedupe_preserve_task(),
         _parse_int_list_task(),
+        _flatten_one_level_task(),
         _max_subarray_sum_task(),
         _bfs_distance_task(),
         _parse_date_iso_task(),
+        _invert_mapping_task(),
+        _merge_with_precedence_task(),
         _parse_key_value_task(),
         _parse_csv_row_task(),
+        _parse_csv_quoted_task(),
         _parse_env_block_task(),
         _parse_range_list_task(),
         _parse_bool_tokens_task(),

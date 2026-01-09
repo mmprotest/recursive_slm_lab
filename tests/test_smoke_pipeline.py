@@ -18,6 +18,7 @@ from recursive_slm_lab.eval import evaluate_conditions, plot_results
 
 def test_smoke_pipeline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("RSLM_FAST_VERIFY", "1")
+    monkeypatch.setenv("RSLM_VERIFY_WORKERS", "1")
     tasks_path = tmp_path / "bundled_tasks.jsonl"
     cli_seed_tasks(regen=True, count=120, out=tasks_path)
     db_path = tmp_path / "memory.sqlite"

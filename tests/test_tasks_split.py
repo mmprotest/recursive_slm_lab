@@ -10,11 +10,11 @@ from recursive_slm_lab.tasks import Task, split_tasks
 
 def test_split_tasks_honors_heldout_only() -> None:
     tasks = [
-        Task("t1", "p1", "f1", "()", "tests", ["assert True"], tags=["heldout_only"]),
-        Task("t2", "p2", "f2", "()", "tests", ["assert True"]),
-        Task("t3", "p3", "f3", "()", "tests", ["assert True"], tags=["heldout_only"]),
-        Task("t4", "p4", "f4", "()", "tests", ["assert True"]),
-        Task("t5", "p5", "f5", "()", "tests", ["assert True"]),
+        Task("t1", "p1", "f1", "()", "tests", "math", 1, ["assert True"], tags=["heldout_only"]),
+        Task("t2", "p2", "f2", "()", "tests", "math", 1, ["assert True"]),
+        Task("t3", "p3", "f3", "()", "tests", "parsing", 2, ["assert True"], tags=["heldout_only"]),
+        Task("t4", "p4", "f4", "()", "tests", "parsing", 2, ["assert True"]),
+        Task("t5", "p5", "f5", "()", "tests", "lists", 1, ["assert True"]),
     ]
 
     train_pool, heldout = split_tasks(tasks, heldout_size=3, seed=1)
