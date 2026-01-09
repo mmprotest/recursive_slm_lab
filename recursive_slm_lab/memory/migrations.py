@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime, timezone
+
+SCHEMA_VERSION = 2
 
 
 def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
@@ -107,6 +110,8 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
 
     _ensure_rules_schema(conn)
     _ensure_procedures_schema(conn)
+    _ensure_schema_meta(conn)
+    _apply_schema_migrations(conn)
 
     if _table_exists(conn, "episodes"):
         if not _column_exists(conn, "episodes", "run_id"):
@@ -133,6 +138,52 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
             conn.execute("ALTER TABLE failures ADD COLUMN memory_top_score REAL")
 
     conn.commit()
+
+
+def _ensure_schema_meta(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS schema_meta (
+            singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+            schema_version INTEGER NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+
+
+def _current_schema_version(conn: sqlite3.Connection) -> int:
+    row = conn.execute(
+        "SELECT schema_version FROM schema_meta WHERE singleton = 1"
+    ).fetchone()
+    return int(row[0]) if row else 0
+
+
+def _set_schema_version(conn: sqlite3.Connection, version: int) -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        """
+        INSERT INTO schema_meta (singleton, schema_version, updated_at)
+        VALUES (1, ?, ?)
+        ON CONFLICT(singleton) DO UPDATE SET schema_version = excluded.schema_version, updated_at = excluded.updated_at
+        """,
+        (version, now),
+    )
+
+
+def _apply_schema_migrations(conn: sqlite3.Connection) -> None:
+    current = _current_schema_version(conn)
+    if current >= SCHEMA_VERSION:
+        return
+    migrations: dict[int, callable] = {
+        1: lambda _: None,
+        2: lambda connection: rebuild_fts(connection),
+    }
+    for target in range(current + 1, SCHEMA_VERSION + 1):
+        migration = migrations.get(target)
+        if migration:
+            migration(conn)
+        _set_schema_version(conn, target)
 
 
 def _ensure_rules_schema(conn: sqlite3.Connection) -> None:
@@ -238,9 +289,6 @@ def _ensure_procedures_schema(conn: sqlite3.Connection) -> None:
 
 
 def _ensure_rules_fts(conn: sqlite3.Connection) -> None:
-    conn.execute("DROP TABLE IF EXISTS rules_fts")
-    conn.execute("DROP TRIGGER IF EXISTS rules_ai")
-    conn.execute("DROP TRIGGER IF EXISTS rules_ad")
     conn.execute(
         """
         CREATE VIRTUAL TABLE IF NOT EXISTS rules_fts USING fts5(
@@ -265,9 +313,6 @@ def _ensure_rules_fts(conn: sqlite3.Connection) -> None:
 
 
 def _ensure_procedures_fts(conn: sqlite3.Connection) -> None:
-    conn.execute("DROP TABLE IF EXISTS procedures_fts")
-    conn.execute("DROP TRIGGER IF EXISTS procedures_ai")
-    conn.execute("DROP TRIGGER IF EXISTS procedures_ad")
     conn.execute(
         """
         CREATE VIRTUAL TABLE IF NOT EXISTS procedures_fts USING fts5(
@@ -289,3 +334,16 @@ def _ensure_procedures_fts(conn: sqlite3.Connection) -> None:
         END;
         """
     )
+
+
+def rebuild_fts(conn: sqlite3.Connection) -> None:
+    conn.execute("DROP TABLE IF EXISTS rules_fts")
+    conn.execute("DROP TRIGGER IF EXISTS rules_ai")
+    conn.execute("DROP TRIGGER IF EXISTS rules_ad")
+    conn.execute("DROP TABLE IF EXISTS procedures_fts")
+    conn.execute("DROP TRIGGER IF EXISTS procedures_ai")
+    conn.execute("DROP TRIGGER IF EXISTS procedures_ad")
+    _ensure_rules_fts(conn)
+    _ensure_procedures_fts(conn)
+    conn.execute("INSERT INTO rules_fts(rules_fts) VALUES('rebuild')")
+    conn.execute("INSERT INTO procedures_fts(procedures_fts) VALUES('rebuild')")

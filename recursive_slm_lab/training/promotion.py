@@ -21,6 +21,7 @@ class PromotionConfig:
     k: int
     min_improvement: float
     max_regression_drop: float
+    noise_band: float
     max_tokens: int
     temperature: float
     top_p: float
@@ -39,6 +40,7 @@ class PromotionResult:
     candidate_adapter: str | None
     previous_adapter: str | None
     metrics: dict
+    rationale: dict
     message: str
 
 
@@ -72,6 +74,7 @@ def train_and_maybe_promote(conn: sqlite3.Connection, cfg: PromotionConfig) -> P
             candidate_adapter=None,
             previous_adapter=previous_adapter_name,
             metrics={},
+            rationale={"reasons": ["training_failed"]},
             message=training_result.message,
         )
 
@@ -123,11 +126,21 @@ def train_and_maybe_promote(conn: sqlite3.Connection, cfg: PromotionConfig) -> P
         seed=cfg.seed,
     )
 
+    noise_reject = abs(heldout_delta.mean) < cfg.noise_band and heldout_delta.ci_low <= 0.0 <= heldout_delta.ci_high
     promoted = (
         heldout_delta.mean >= cfg.min_improvement
         and heldout_delta.ci_low >= 0.0
         and hidden_delta.mean >= -cfg.max_regression_drop
         and hidden_delta.ci_low >= -cfg.max_regression_drop
+        and not noise_reject
+    )
+    rationale = _promotion_rationale(
+        heldout_delta,
+        hidden_delta,
+        cfg.min_improvement,
+        cfg.max_regression_drop,
+        cfg.noise_band,
+        noise_reject,
     )
     decision = "promoted" if promoted else "rejected"
     if promoted:
@@ -159,10 +172,16 @@ def train_and_maybe_promote(conn: sqlite3.Connection, cfg: PromotionConfig) -> P
             "max_regression_drop": cfg.max_regression_drop,
             "weak_task_ids": weak_hidden_ids,
         },
+        "gating": {
+            "noise_band": cfg.noise_band,
+            "noise_reject": noise_reject,
+            "rationale": rationale,
+        },
     }
     payload = {
         "decision": decision,
         "metrics": metrics,
+        "decision_rationale": rationale,
         "config": cfg.__dict__,
         "previous_adapter": previous_adapter_name,
         "candidate_adapter": training_result.adapter_name,
@@ -184,5 +203,31 @@ def train_and_maybe_promote(conn: sqlite3.Connection, cfg: PromotionConfig) -> P
         candidate_adapter=training_result.adapter_name,
         previous_adapter=previous_adapter_name,
         metrics=metrics,
+        rationale=rationale,
         message=message,
     )
+
+
+def _promotion_rationale(
+    heldout_delta,
+    hidden_delta,
+    min_improvement: float,
+    max_regression_drop: float,
+    noise_band: float,
+    noise_reject: bool,
+) -> dict:
+    reasons: list[str] = []
+    if heldout_delta.mean < min_improvement:
+        reasons.append("heldout_mean_below_threshold")
+    if heldout_delta.ci_low < 0.0:
+        reasons.append("heldout_ci_low_negative")
+    if noise_reject:
+        reasons.append("within_noise_band")
+    if hidden_delta.mean < -max_regression_drop or hidden_delta.ci_low < -max_regression_drop:
+        reasons.append("regression_detected")
+    return {
+        "reasons": reasons,
+        "min_improvement": min_improvement,
+        "max_regression_drop": max_regression_drop,
+        "noise_band": noise_band,
+    }

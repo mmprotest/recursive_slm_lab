@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ARTIFACTS=./artifacts
+ARTIFACTS=./artifacts_smoke
 DB=$ARTIFACTS/memory.sqlite
-PLOT=$ARTIFACTS/results.png
 
+rm -rf "$ARTIFACTS"
 mkdir -p "$ARTIFACTS"
 
 export RSLM_FAST_VERIFY=1
@@ -15,16 +15,17 @@ rslm seed-tasks
 rslm self-improve \
   --db "$DB" \
   --tasks bundled \
-  --cycles 3 \
-  --train-k 4 \
-  --train-limit 30 \
-  --heldout-size 20 \
+  --cycles 1 \
+  --train-k 1 \
+  --train-limit 5 \
+  --heldout-size 10 \
   --backend mock \
   --memory-enabled \
   --artifacts-dir "$ARTIFACTS" \
-  --seed 1337 \
+  --seed 42 \
   --verify-mode local
 
-rslm plot --input "$DB" --output "$PLOT"
+test -f "$ARTIFACTS/iteration_001/report.json"
+test -f "$ARTIFACTS/iteration_001/report.md"
 
-echo "Demo complete. Reports: $ARTIFACTS/iteration_*/report.json"
+echo "Smoke demo complete."

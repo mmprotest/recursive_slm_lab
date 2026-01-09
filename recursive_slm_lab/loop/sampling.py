@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import random
 
 from ..llm.base import LLMBackend
 from ..llm.localhf import extract_python_function_code
@@ -31,6 +32,7 @@ def generate_candidates(
     top_p: float,
     top_k: int,
     policy: Policy | None = None,
+    seed: int | None = None,
 ) -> list[Candidate]:
     memory_block = memory_context.format() if memory_context else ""
     example_code = memory_context.first_code() if memory_context else None
@@ -48,7 +50,11 @@ def generate_candidates(
         {"role": "user", "content": prompt},
     ]
     candidates: list[Candidate] = []
-    for _ in range(k):
+    for idx in range(k):
+        if seed is not None:
+            random.seed(seed + idx)
+            if hasattr(backend, "seed"):
+                backend.seed = seed + idx
         response = backend.generate(
             messages,
             max_tokens=max_tokens,

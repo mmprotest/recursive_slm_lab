@@ -2,6 +2,11 @@
 
 A runnable demo for persistent memory plus continuous learning using verification-gated recursion.
 
+In this repo, "recursive self-improving" means each iteration closes the loop with measurable deltas
+(trainpool/heldout/regression pass-rates plus memory/learning ablations), and promotions only happen
+when deterministic gates show no regressions. Reports are written every iteration so improvements are
+attributable and auditable.
+
 This repo evaluates four conditions:
 1. Baseline (no memory, no learning)
 2. Memory only
@@ -57,6 +62,8 @@ scripts/run_demo.ps1
 ```
 
 Artifacts are written under `./artifacts/`.
+Each iteration emits `artifacts/iteration_<ITER>/report.json` and `report.md` with ablation metrics and
+promotion rationales.
 Each eval run is also stored in the SQLite DB so plots can show progress across iterations.
 Set `RSLM_FAST_VERIFY=1` to use a lightweight assert harness instead of pytest when tasks provide `assert_tests`.
 
@@ -200,6 +207,12 @@ rslm self-improve --db artifacts/memory.sqlite --backend mock --cycles 3 --train
 ```
 
 `rslm self-improve` defaults to Docker verification for safety when `--verify-mode` is not provided.
+
+## SQLite migration model
+
+Migrations run once in a parent process (`rslm init-db` or any command that opens the DB with
+`connect(..., migrate=True)`). Worker processes (verification pools) open connections with
+`migrate=False` to avoid destructive schema changes under multiprocessing.
 
 Optional self-patching (uses a non-mock backend to propose diffs and only promotes when gates pass):
 

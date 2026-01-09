@@ -6,7 +6,6 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
-import random
 
 from ..config import Config
 from ..eval.robust import robust_eval_conditions
@@ -23,6 +22,8 @@ from ..tasks import load_tasks, load_hidden_tasks, split_tasks
 from ..training import train_and_maybe_promote, PromotionConfig
 from ..util import ensure_dir
 from .iteration import run_iteration
+from .reporting import write_iteration_report
+from .scheduler import schedule_tasks
 
 
 def run_self_improve(
@@ -95,9 +96,21 @@ def run_self_improve(
                 condition="trainpool",
                 policy=policy,
                 db_path=db_path,
+                seed=seed,
             )
             passed_any = sum(1 for result in iteration_results if result.passed)
-            consolidate(conn, min_evidence=3)
+            train_metrics = {
+                "passed": passed_any,
+                "total": len(iteration_results),
+                "pass_rate": passed_any / len(iteration_results) if iteration_results else 0.0,
+            }
+            eval_snapshot = {
+                "trainpool_pass_rate": train_metrics["pass_rate"],
+                "seed": seed,
+                "iteration": cycle,
+                "created_at": _utc_now(),
+            }
+            consolidate(conn, min_evidence=3, eval_snapshot=eval_snapshot)
 
             policy_message = "Policy improve disabled."
             if enable_policy_improve:
@@ -128,6 +141,7 @@ def run_self_improve(
                     deterministic=True,
                     min_delta=0.01,
                     max_drop=0.0,
+                    noise_band=0.005,
                     notes=failure_summary,
                 )
                 policy_message = policy_result.message
@@ -144,6 +158,7 @@ def run_self_improve(
                     k=1,
                     min_improvement=0.02,
                     max_regression_drop=0.0,
+                    noise_band=0.005,
                     max_tokens=max_tokens,
                     temperature=0.0,
                     top_p=1.0,
@@ -169,6 +184,25 @@ def run_self_improve(
                 top_k=0,
                 policy_name=None,
                 repeats=3,
+                deterministic=True,
+                seed=seed,
+            )
+            from ..eval.evaluate import evaluate_conditions
+
+            eval_payload = evaluate_conditions(
+                db_path=db_path,
+                backend_name=config.backend,
+                conditions=_resolve_conditions(config.backend),
+                k=1,
+                heldout_size=heldout_size,
+                task_limit=None,
+                output_path=None,
+                max_tokens=max_tokens,
+                temperature=0.0,
+                top_p=1.0,
+                top_k=0,
+                policy_name=None,
+                repeats=1,
                 deterministic=True,
                 seed=seed,
             )
@@ -202,11 +236,77 @@ def run_self_improve(
                     "task_ids": [task.task_id for task in selected],
                     "k": train_k,
                 },
-                "eval": eval_summary,
+                "eval_summary": eval_summary,
                 "robust_eval": robust_payload,
+                "eval": eval_payload,
             }
             artifact_path = artifacts_dir / f"cycle_{cycle:03d}.json"
             artifact_path.write_text(json.dumps(cycle_payload, indent=2), encoding="utf-8")
+
+            conditions_map = {item["condition"]: item for item in robust_payload.get("conditions", [])}
+            memory_ablation = {
+                "off": conditions_map.get("baseline", {}),
+                "on": conditions_map.get("memory", {}),
+            }
+            learning_note = None
+            if config.backend != "localhf":
+                learning_note = "learning_unavailable"
+            learning_ablation = {
+                "off": conditions_map.get("memory", {}),
+                "on": conditions_map.get("memory_learning", {}),
+                "note": learning_note,
+            }
+            heldout_condition = "memory" if memory_enabled else "baseline"
+            heldout_raw = conditions_map.get(heldout_condition, {}).get("heldout", {})
+            regression_raw = conditions_map.get("baseline", {}).get("hidden", {})
+            heldout_metrics = {
+                "pass_rate": heldout_raw.get("pass_at_1", 0.0),
+                "pass_at_k": heldout_raw.get("pass_at_k", 0.0),
+            }
+            regression_metrics = {
+                "pass_rate": regression_raw.get("pass_at_1", 0.0),
+                "pass_at_k": regression_raw.get("pass_at_k", 0.0),
+            }
+            promotions = {
+                "policy": {
+                    "decision": policy_message,
+                    "metrics": getattr(policy_result, "metrics", None),
+                    "rationale": getattr(policy_result, "rationale", None),
+                }
+                if enable_policy_improve
+                else {"decision": "disabled"},
+                "adapter": {
+                    "decision": adapter_message,
+                    "metrics": getattr(adapter_result, "metrics", None),
+                    "rationale": getattr(adapter_result, "rationale", None),
+                }
+                if enable_adapter_train
+                else {"decision": "disabled"},
+            }
+            write_iteration_report(
+                conn=conn,
+                iteration=cycle,
+                artifacts_dir=artifacts_dir,
+                config_snapshot={
+                    "backend": config.backend,
+                    "model": config.model,
+                    "memory_enabled": memory_enabled,
+                    "seed": seed,
+                    "train_k": train_k,
+                    "train_limit": train_limit,
+                    "heldout_size": heldout_size,
+                    "task_ids": [task.task_id for task in selected],
+                },
+                train_metrics=train_metrics,
+                heldout_metrics=heldout_metrics,
+                regression_metrics=regression_metrics,
+                ablations={
+                    "memory": _normalize_ablation(memory_ablation),
+                    "learning": _normalize_ablation(learning_ablation),
+                },
+                promotions=promotions,
+                cycle_window={"started_at": cycle_start, "completed_at": cycle_end},
+            )
 
             improved = eval_summary["heldout_pass_at_1"] > previous_best
             tests_failing = passed_any == 0
@@ -266,19 +366,17 @@ def _load_tasks(tasks_source: str, config: Config):
 
 def _select_unseen_tasks(conn, tasks, task_limit: Optional[int], unseen_only: bool, seed: int) -> list:
     if not unseen_only:
-        return tasks[:task_limit] if task_limit is not None else tasks
+        return schedule_tasks(conn, tasks, task_limit, seed)
     seen_ids = fetch_seen_task_ids(conn)
     unseen = [task for task in tasks if task.task_id not in seen_ids]
-    rng = random.Random(seed)
-    rng.shuffle(unseen)
     if task_limit is None:
-        return unseen
+        return schedule_tasks(conn, unseen, None, seed)
     if len(unseen) >= task_limit:
-        return unseen[:task_limit]
+        return schedule_tasks(conn, unseen, task_limit, seed)
     remaining = [task for task in tasks if task.task_id in seen_ids]
-    rng.shuffle(remaining)
     needed = task_limit - len(unseen)
-    return unseen + remaining[:needed]
+    scheduled_remaining = schedule_tasks(conn, remaining, needed, seed)
+    return unseen + scheduled_remaining
 
 
 def _best_condition_summary(conditions: list[dict]) -> dict:
@@ -297,6 +395,26 @@ def _best_condition_summary(conditions: list[dict]) -> dict:
                 "hidden_pass_at_1": hidden,
             }
     return best
+
+
+def _normalize_ablation(payload: dict) -> dict:
+    def _normalize_block(block: dict) -> dict:
+        heldout = block.get("heldout", {}) if block else {}
+        hidden = block.get("hidden", {}) if block else {}
+        return {
+            "heldout_pass_at_1": heldout.get("pass_at_1", 0.0),
+            "heldout_pass_at_k": heldout.get("pass_at_k", 0.0),
+            "hidden_pass_at_1": hidden.get("pass_at_1", 0.0),
+            "hidden_pass_at_k": hidden.get("pass_at_k", 0.0),
+        }
+
+    off = _normalize_block(payload.get("off", {})) if payload.get("off") is not None else {}
+    on = _normalize_block(payload.get("on", {})) if payload.get("on") is not None else {}
+    note = payload.get("note")
+    normalized = {"off": off, "on": on}
+    if note:
+        normalized["note"] = note
+    return normalized
 
 
 def _active_policy_name(conn) -> str:

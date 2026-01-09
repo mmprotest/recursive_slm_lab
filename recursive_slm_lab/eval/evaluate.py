@@ -63,7 +63,12 @@ def evaluate_conditions(
     config = Config(db_path=db_path, backend=backend_name)
     tasks = load_tasks(include_generated=Config().include_generated_tasks)
     hidden_tasks = load_hidden_tasks()
-    _, heldout, _ = split_tasks(tasks, heldout_size=heldout_size, hidden_tasks=hidden_tasks)
+    _, heldout, _ = split_tasks(
+        tasks,
+        heldout_size=heldout_size,
+        hidden_tasks=hidden_tasks,
+        seed=seed,
+    )
     if task_limit is not None:
         heldout = heldout[:task_limit]
 

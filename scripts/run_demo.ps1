@@ -11,15 +11,8 @@ $env:RSLM_FAST_VERIFY = "1"
 rslm init-db --db $Db
 rslm seed-tasks
 
-1..3 | ForEach-Object {
-  Write-Host "Running iteration $_"
-  $Iter = $_.ToString("000")
-  $ResultsIter = "$Artifacts/results_iter$Iter.json"
-  rslm run-iteration --db $Db --tasks bundled --k 4 --mode trainpool --backend mock --memory-enabled --heldout-size 20 --task-limit 30
-  rslm consolidate --db $Db --min-evidence 1
-  rslm eval --db $Db --backend mock --conditions all --k 1 --heldout-size 20 --task-limit 20 --output $ResultsIter
-}
+rslm self-improve --db $Db --tasks bundled --cycles 3 --train-k 4 --train-limit 30 --heldout-size 20 --backend mock --memory-enabled --artifacts-dir $Artifacts --seed 1337 --verify-mode local
 
 rslm plot --input $Db --output $Plot
 
-Write-Host "Demo complete. Results: $Artifacts/results_iter*.json"
+Write-Host "Demo complete. Reports: $Artifacts/iteration_*/report.json"

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from datetime import datetime, timezone
 from typing import Optional
-import random
 
 import typer
 from rich import print
@@ -33,6 +33,7 @@ from .memory import (
 )
 from .tasks import load_tasks, load_hidden_tasks, validate_tasks, split_tasks
 from .loop import run_iteration, run_self_improve
+from .loop.scheduler import schedule_tasks
 from .eval import evaluate_conditions, plot_results, find_weak_tasks
 from .eval.robust import robust_eval_conditions
 from .meta import summarize_failures, propose_policy, evaluate_and_maybe_promote_policy
@@ -91,20 +92,18 @@ def _select_unseen_tasks(
     seed: int,
 ) -> list:
     if not unseen_only:
-        return tasks[:task_limit] if task_limit is not None else tasks
+        return schedule_tasks(conn, tasks, task_limit, seed)
     seen_ids = fetch_seen_task_ids(conn)
     unseen = [task for task in tasks if task.task_id not in seen_ids]
-    rng = random.Random(seed)
-    rng.shuffle(unseen)
     if task_limit is None:
-        return unseen
+        return schedule_tasks(conn, unseen, None, seed)
     if len(unseen) >= task_limit:
-        return unseen[:task_limit]
+        return schedule_tasks(conn, unseen, task_limit, seed)
     print("[yellow]Warning: ran out of unseen tasks, wrapping around.[/yellow]")
     remaining = [task for task in tasks if task.task_id in seen_ids]
-    rng.shuffle(remaining)
     needed = task_limit - len(unseen)
-    return unseen + remaining[:needed]
+    scheduled_remaining = schedule_tasks(conn, remaining, needed, seed)
+    return unseen + scheduled_remaining
 
 
 def _load_latest_cycle_artifact(artifacts_dir: Path) -> dict | None:
@@ -210,6 +209,7 @@ def cli_run_iteration(
     verify_workers: Optional[int] = typer.Option(
         None, help="Parallel verification workers (defaults to RSLM_VERIFY_WORKERS)"
     ),
+    seed: int = typer.Option(1337, help="Seed for candidate sampling"),
 ) -> None:
     resolved_memory = False
     if no_memory:
@@ -259,6 +259,7 @@ def cli_run_iteration(
         policy=policy,
         db_path=db,
         verify_workers=verify_workers,
+        seed=seed,
     )
     conn.close()
     passed = sum(1 for r in results if r.passed)
@@ -274,6 +275,7 @@ def cli_run_iteration(
             "temperature": temperature,
             "top_p": top_p,
             "top_k": top_k,
+            "seed": seed,
         },
         "git_commit": git_commit_hash(),
         "task_ids": [task.task_id for task in selected],
@@ -463,7 +465,11 @@ def cli_consolidate(
     min_evidence: int = typer.Option(3, help="Minimum evidence count"),
 ) -> None:
     conn = connect(db)
-    consolidate(conn, min_evidence=min_evidence)
+    eval_snapshot = {
+        "source": "cli",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    consolidate(conn, min_evidence=min_evidence, eval_snapshot=eval_snapshot)
     conn.close()
     print("Consolidation complete.")
 
@@ -675,6 +681,7 @@ def cli_train_and_promote(
     k: int = typer.Option(1, help="pass@k"),
     min_improvement: float = typer.Option(0.02, help="Absolute pass@1 gain required"),
     max_regression_drop: float = typer.Option(0.0, help="Allowed regression drop"),
+    noise_band: float = typer.Option(0.005, help="Noise band for heldout improvements"),
     backend: Optional[str] = typer.Option(None, help="Backend (must be localhf)"),
     max_tokens: int = typer.Option(256, help="Max tokens"),
     temperature: float = typer.Option(0.0, help="Sampling temperature"),
@@ -705,6 +712,7 @@ def cli_train_and_promote(
             k=k,
             min_improvement=min_improvement,
             max_regression_drop=max_regression_drop,
+            noise_band=noise_band,
             max_tokens=max_tokens,
             temperature=temperature,
             top_p=top_p,
@@ -767,6 +775,7 @@ def cli_policy_run_meta_iteration(
     repeats: int = typer.Option(3, help="Repeat evaluations"),
     min_delta: float = typer.Option(0.01, help="Minimum heldout improvement"),
     max_drop: float = typer.Option(0.0, help="Maximum regression drop"),
+    noise_band: float = typer.Option(0.005, help="Noise band for heldout improvements"),
     failures: int = typer.Option(50, help="Failure history size to summarize"),
     deterministic: bool = typer.Option(True, "--deterministic/--stochastic", help="Deterministic gating"),
 ) -> None:
@@ -806,6 +815,7 @@ def cli_policy_run_meta_iteration(
         deterministic=deterministic,
         min_delta=min_delta,
         max_drop=max_drop,
+        noise_band=noise_band,
         notes=failure_summary,
     )
     conn.close()
