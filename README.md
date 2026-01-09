@@ -87,6 +87,7 @@ Adapters cannot be applied in this mode, so the "learned" condition is unavailab
 - `RSLM_TOP_P`: nucleus sampling value
 - `RSLM_TOP_K`: top-k sampling value
 - `RSLM_FAST_VERIFY`: set to `1` to use assert-based fast verification
+- `RSLM_STRICT_VERIFY`: set to `1` to apply tighter verifier limits
 
 ## CLI overview
 
@@ -95,9 +96,12 @@ rslm init-db --db artifacts/memory.sqlite
 rslm seed-tasks
 rslm run-iteration --db artifacts/memory.sqlite --tasks bundled --k 4 --mode trainpool --backend mock --memory-enabled --heldout-size 20 --task-limit 30
 rslm consolidate --db artifacts/memory.sqlite --min-evidence 1
+rslm consolidate-llm --db artifacts/memory.sqlite --backend openai --heldout-size 20 --task-limit 20 --sample-episodes 80 --max-rules 20 --min-gain 0.01
 rslm eval --db artifacts/memory.sqlite --backend mock --conditions all --k 1 --heldout-size 20 --task-limit 20 --output artifacts/results_iter001.json
 rslm plot --input artifacts/memory.sqlite --output artifacts/results.png
 ```
+
+Note: Typer boolean flags use `--memory-enabled/--no-memory` (no extra `true/false` argument).
 
 ## Generate tasks
 
@@ -141,6 +145,12 @@ rslm train-lora --db artifacts/memory.sqlite --out adapters/adapter_v001
 ```
 
 If optional dependencies are missing, the command exits cleanly with a clear message and no crash.
+
+Train-and-promote (LocalHF only) trains an adapter and activates it only if it passes heldout/regression gates:
+
+```bash
+rslm train-and-promote --db artifacts/memory.sqlite --out adapters/adapter_v002 --backend localhf --heldout-size 40 --regression-size 25 --min-improvement 0.02 --max-regression-drop 0.0
+```
 
 ## Notes
 

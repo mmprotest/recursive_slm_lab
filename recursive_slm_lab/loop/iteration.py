@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 
-from ..memory import insert_episode_many, retrieve_memory, mark_task_seen
+from ..llm.localhf import LocalHFBackend
+from ..llm.mock import MockBackend
+from ..llm.openai_compat import OpenAICompatBackend
+from ..memory import insert_episode_many, retrieve_memory, mark_task_seen, RunMeta, start_run, get_active_adapter
 from ..verify import verify_candidate
 from ..tasks import Task
 from ..llm.base import LLMBackend
@@ -28,6 +32,43 @@ def run_iteration(
     memory_enabled: bool,
     condition: str,
 ) -> list[IterationResult]:
+    backend_name = "mock"
+    model_name = "unknown"
+    if isinstance(backend, MockBackend):
+        backend_name = "mock"
+        model_name = backend.model_name
+    elif isinstance(backend, OpenAICompatBackend):
+        backend_name = "openai"
+        model_name = backend.model
+    elif isinstance(backend, LocalHFBackend):
+        backend_name = "localhf"
+        model_name = backend.model_path
+    adapter_name = None
+    active = get_active_adapter(conn)
+    if active:
+        adapter_name = active[0]
+
+    run_id = start_run(
+        conn,
+        RunMeta(
+            mode=condition,
+            backend=backend_name,
+            model=model_name,
+            adapter_name=adapter_name,
+            memory_enabled=memory_enabled,
+            semantic_enabled=False,
+            learning_enabled=False,
+            k=k,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
+            config_json={
+                "condition": condition,
+                "memory_enabled": memory_enabled,
+            },
+        ),
+    )
     results: list[IterationResult] = []
     for task in tasks:
         mark_task_seen(conn, task.task_id)
@@ -48,9 +89,17 @@ def run_iteration(
             top_k=top_k,
         )
         passed_any = False
-        episode_rows: list[tuple[str, str, str, str, bool, str]] = []
+        retrieval_used = bool(memory_context and memory_context.hits)
+        memory_sources = None
+        memory_top_score = None
+        if memory_context and memory_context.hits:
+            sources = sorted({hit.source for hit in memory_context.hits})
+            memory_sources = ",".join(sources)
+            memory_top_score = min(hit.score for hit in memory_context.hits)
+        episode_rows: list[tuple] = []
         for candidate in candidates:
             verification = verify_candidate(candidate.code, task.reference_tests, task.assert_tests)
+            prompt_hash = hashlib.sha256(candidate.prompt.encode("utf-8")).hexdigest()
             episode_rows.append(
                 (
                     task.task_id,
@@ -59,6 +108,11 @@ def run_iteration(
                     candidate.code,
                     verification.passed,
                     verification.log,
+                    run_id,
+                    prompt_hash,
+                    retrieval_used,
+                    memory_sources,
+                    memory_top_score,
                 )
             )
             if verification.passed:
