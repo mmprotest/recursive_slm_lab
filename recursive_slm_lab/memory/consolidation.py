@@ -76,7 +76,13 @@ def _extract_procedures(prompt: str) -> list[tuple[str, str]]:
     return procedures
 
 
-def consolidate(conn: sqlite3.Connection, min_evidence: int = 3) -> None:
+def consolidate(
+    conn: sqlite3.Connection,
+    min_evidence: int = 3,
+    eval_snapshot: dict | None = None,
+) -> None:
+    if eval_snapshot is None:
+        eval_snapshot = {"heldout": None, "hidden": None, "note": "snapshot_missing"}
     rows = conn.execute(
         "SELECT DISTINCT task_id, prompt FROM episodes WHERE passed = 1"
     ).fetchall()
@@ -100,14 +106,14 @@ def consolidate(conn: sqlite3.Connection, min_evidence: int = 3) -> None:
         if evidence_count < min_evidence:
             continue
         origin_ids = _episode_ids_for_tasks(conn, task_ids)
-        eval_snapshot = json.dumps({"heldout": None, "hidden": None})
+        eval_payload = json.dumps(eval_snapshot)
         cursor = conn.execute(
             """
             INSERT INTO semantic_rules
             (key, rule_text, created_at, origin_episode_ids, evidence_count, eval_snapshot, active, superseded_by, last_verified_at)
             VALUES (?, ?, ?, ?, ?, ?, 1, NULL, ?)
             """,
-            (key, rule_text[key], now, json.dumps(origin_ids), evidence_count, eval_snapshot, now),
+            (key, rule_text[key], now, json.dumps(origin_ids), evidence_count, eval_payload, now),
         )
         new_id = int(cursor.lastrowid)
         conn.execute(
@@ -123,14 +129,14 @@ def consolidate(conn: sqlite3.Connection, min_evidence: int = 3) -> None:
         if evidence_count < min_evidence:
             continue
         origin_ids = _episode_ids_for_tasks(conn, task_ids)
-        eval_snapshot = json.dumps({"heldout": None, "hidden": None})
+        eval_payload = json.dumps(eval_snapshot)
         cursor = conn.execute(
             """
             INSERT INTO procedures
             (pattern, recipe_text, created_at, origin_episode_ids, evidence_count, eval_snapshot, active, superseded_by, last_verified_at)
             VALUES (?, ?, ?, ?, ?, ?, 1, NULL, ?)
             """,
-            (key, proc_text[key], now, json.dumps(origin_ids), evidence_count, eval_snapshot, now),
+            (key, proc_text[key], now, json.dumps(origin_ids), evidence_count, eval_payload, now),
         )
         new_id = int(cursor.lastrowid)
         conn.execute(

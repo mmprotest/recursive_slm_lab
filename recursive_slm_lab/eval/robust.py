@@ -183,7 +183,12 @@ def robust_eval_conditions(
     config = Config(db_path=db_path, backend=backend_name)
     tasks = load_tasks(include_generated=config.include_generated_tasks)
     hidden_tasks = load_hidden_tasks()
-    _, heldout, hidden = split_tasks(tasks, heldout_size=heldout_size, hidden_tasks=hidden_tasks)
+    _, heldout, hidden = split_tasks(
+        tasks,
+        heldout_size=heldout_size,
+        hidden_tasks=hidden_tasks,
+        seed=seed,
+    )
     if task_limit is not None:
         heldout = heldout[:task_limit]
         hidden = hidden[:task_limit]

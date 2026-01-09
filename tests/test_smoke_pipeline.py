@@ -41,7 +41,7 @@ def test_smoke_pipeline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
         memory_enabled=True,
         condition="trainpool",
     )
-    consolidate(conn, min_evidence=1)
+    consolidate(conn, min_evidence=1, eval_snapshot={"source": "test"})
     conn.close()
 
     output_path = tmp_path / "results.json"

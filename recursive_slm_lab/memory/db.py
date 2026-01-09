@@ -74,18 +74,19 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def connect(db_path: str | Path) -> sqlite3.Connection:
+def connect(db_path: str | Path, *, migrate: bool = True) -> sqlite3.Connection:
     path = Path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path)
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA foreign_keys=ON;")
-    ensure_schema(conn)
+    if migrate:
+        ensure_schema(conn)
     return conn
 
 
 def init_db(db_path: str | Path) -> None:
-    conn = connect(db_path)
+    conn = connect(db_path, migrate=True)
     schema = SCHEMA_PATH.read_text(encoding="utf-8")
     conn.executescript(schema)
     conn.commit()

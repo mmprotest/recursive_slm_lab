@@ -23,6 +23,7 @@ class PolicyPromotionResult:
     decision: str
     candidate_name: str | None
     metrics: dict
+    rationale: dict
     message: str
 
 
@@ -80,6 +81,7 @@ def evaluate_and_maybe_promote_policy(
     deterministic: bool,
     min_delta: float,
     max_drop: float,
+    noise_band: float,
     notes: str | None = None,
 ) -> PolicyPromotionResult:
     train_pool, heldout, hidden, weak_hidden_ids = split_for_gating(heldout_size)
@@ -122,13 +124,23 @@ def evaluate_and_maybe_promote_policy(
         candidate_hidden.per_task_pass_at_1,
         seed=seed,
     )
+    noise_reject = abs(heldout_delta.mean) < noise_band and heldout_delta.ci_low <= 0.0 <= heldout_delta.ci_high
     promoted = (
         heldout_delta.mean >= min_delta
         and heldout_delta.ci_low >= 0.0
         and hidden_delta.mean >= -max_drop
         and hidden_delta.ci_low >= -max_drop
+        and not noise_reject
     )
     decision = "accept" if promoted else "reject"
+    rationale = _promotion_rationale(
+        heldout_delta,
+        hidden_delta,
+        min_delta,
+        max_drop,
+        noise_band,
+        noise_reject,
+    )
 
     candidate_name = None
     if promoted:
@@ -162,6 +174,11 @@ def evaluate_and_maybe_promote_policy(
             "max_drop": max_drop,
             "weak_task_ids": weak_hidden_ids,
         },
+        "gating": {
+            "noise_band": noise_band,
+            "noise_reject": noise_reject,
+            "rationale": rationale,
+        },
     }
     _record_policy_promotion(
         conn,
@@ -172,7 +189,13 @@ def evaluate_and_maybe_promote_policy(
         notes=notes,
     )
     message = "Policy promoted." if promoted else "Policy rejected."
-    return PolicyPromotionResult(decision=decision, candidate_name=candidate_name, metrics=metrics, message=message)
+    return PolicyPromotionResult(
+        decision=decision,
+        candidate_name=candidate_name,
+        metrics=metrics,
+        rationale=rationale,
+        message=message,
+    )
 
 
 def _validate_policy_dict(payload: dict) -> dict:
@@ -190,6 +213,31 @@ def _validate_policy_dict(payload: dict) -> dict:
             block["k"] = max(1, min(block["k"], 16))
         payload[key] = block
     return payload
+
+
+def _promotion_rationale(
+    heldout_delta,
+    hidden_delta,
+    min_delta: float,
+    max_drop: float,
+    noise_band: float,
+    noise_reject: bool,
+) -> dict:
+    reasons: list[str] = []
+    if heldout_delta.mean < min_delta:
+        reasons.append("heldout_mean_below_threshold")
+    if heldout_delta.ci_low < 0.0:
+        reasons.append("heldout_ci_low_negative")
+    if noise_reject:
+        reasons.append("within_noise_band")
+    if hidden_delta.mean < -max_drop or hidden_delta.ci_low < -max_drop:
+        reasons.append("regression_detected")
+    return {
+        "reasons": reasons,
+        "min_delta": min_delta,
+        "max_drop": max_drop,
+        "noise_band": noise_band,
+    }
 
 
 def _merge_policy_dict(base: dict, proposed: dict) -> dict:

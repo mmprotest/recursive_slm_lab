@@ -37,6 +37,7 @@ def run_iteration(
     policy: Policy | None = None,
     db_path: str | None = None,
     verify_workers: int | None = None,
+    seed: int | None = None,
 ) -> list[IterationResult]:
     policy = policy or DEFAULT_POLICY
     verify_workers = _resolve_verify_workers(verify_workers)
@@ -74,11 +75,12 @@ def run_iteration(
             config_json={
                 "condition": condition,
                 "memory_enabled": memory_enabled,
+                "seed": seed,
             },
         ),
     )
     iteration_results: list[IterationResult] = []
-    for task in tasks:
+    for task_index, task in enumerate(tasks):
         mark_task_seen(conn, task.task_id)
         memory_context = None
         if memory_enabled:
@@ -100,6 +102,7 @@ def run_iteration(
             temperature=temperature,
             top_p=top_p,
             top_k=top_k,
+            seed=(seed + task_index * 1000) if seed is not None else None,
         )
         passed_any = False
         retrieval_used = bool(memory_context and memory_context.hits)

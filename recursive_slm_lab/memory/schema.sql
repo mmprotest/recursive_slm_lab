@@ -51,6 +51,15 @@ CREATE TABLE IF NOT EXISTS runs (
     config_json TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS schema_meta (
+    singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+    schema_version INTEGER NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+INSERT OR IGNORE INTO schema_meta (singleton, schema_version, updated_at)
+VALUES (1, 2, datetime('now'));
+
 CREATE TABLE IF NOT EXISTS semantic_rules (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     key TEXT NOT NULL,

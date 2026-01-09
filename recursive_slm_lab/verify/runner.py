@@ -25,11 +25,11 @@ def verify_candidate(
     cache_key = _cache_key(solution_code, test_code, assert_tests)
     should_close = False
     if conn is None and db_path is not None:
-        conn = connect(db_path)
+        conn = connect(db_path, migrate=False)
         should_close = True
     if conn is None and db_path is None:
         db_path = Config().db_path
-        conn = connect(db_path)
+        conn = connect(db_path, migrate=True)
         should_close = True
     if conn is not None:
         cached = _fetch_cache(conn, cache_key)
@@ -57,21 +57,27 @@ def _cache_key(
 
 
 def _fetch_cache(conn: sqlite3.Connection, cache_key: str) -> VerificationResult | None:
-    row = conn.execute(
-        "SELECT passed, log FROM verification_cache WHERE key = ?",
-        (cache_key,),
-    ).fetchone()
+    try:
+        row = conn.execute(
+            "SELECT passed, log FROM verification_cache WHERE key = ?",
+            (cache_key,),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return None
     if not row:
         return None
     return VerificationResult(passed=bool(row[0]), log=row[1])
 
 
 def _store_cache(conn: sqlite3.Connection, cache_key: str, result: VerificationResult) -> None:
-    conn.execute(
-        """
-        INSERT OR REPLACE INTO verification_cache (key, passed, log, created_at)
-        VALUES (?, ?, ?, datetime('now'))
-        """,
-        (cache_key, int(result.passed), result.log),
-    )
-    conn.commit()
+    try:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO verification_cache (key, passed, log, created_at)
+            VALUES (?, ?, ?, datetime('now'))
+            """,
+            (cache_key, int(result.passed), result.log),
+        )
+        conn.commit()
+    except sqlite3.OperationalError:
+        return
