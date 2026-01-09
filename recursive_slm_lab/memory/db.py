@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+
+from .migrations import ensure_schema
 
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
@@ -21,6 +24,24 @@ class Episode:
     code_hash: str
 
 
+@dataclass
+class RunMeta:
+    mode: str
+    backend: str
+    model: str
+    adapter_name: str | None
+    memory_enabled: bool
+    semantic_enabled: bool
+    learning_enabled: bool
+    k: int
+    max_tokens: int
+    temperature: float
+    top_p: float
+    top_k: int
+    notes: str | None = None
+    config_json: dict | None = None
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -31,6 +52,7 @@ def connect(db_path: str | Path) -> sqlite3.Connection:
     conn = sqlite3.connect(path)
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA foreign_keys=ON;")
+    ensure_schema(conn)
     return conn
 
 
@@ -42,6 +64,40 @@ def init_db(db_path: str | Path) -> None:
     conn.close()
 
 
+def start_run(conn: sqlite3.Connection, meta: RunMeta) -> int:
+    created_at = _utc_now()
+    config_json = json.dumps(meta.config_json or {})
+    cursor = conn.execute(
+        """
+        INSERT INTO runs
+        (
+            created_at, mode, backend, model, adapter_name, memory_enabled, semantic_enabled,
+            learning_enabled, k, max_tokens, temperature, top_p, top_k, notes, config_json
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            created_at,
+            meta.mode,
+            meta.backend,
+            meta.model,
+            meta.adapter_name,
+            int(meta.memory_enabled),
+            int(meta.semantic_enabled),
+            int(meta.learning_enabled),
+            meta.k,
+            meta.max_tokens,
+            meta.temperature,
+            meta.top_p,
+            meta.top_k,
+            meta.notes,
+            config_json,
+        ),
+    )
+    conn.commit()
+    return int(cursor.lastrowid)
+
+
 def insert_episode(
     conn: sqlite3.Connection,
     task_id: str,
@@ -50,6 +106,11 @@ def insert_episode(
     candidate_code: str,
     passed: bool,
     test_log: str,
+    run_id: int | None = None,
+    prompt_hash: str | None = None,
+    retrieval_used: bool = False,
+    memory_sources: str | None = None,
+    memory_top_score: float | None = None,
 ) -> None:
     code_hash = hashlib.sha256(candidate_code.encode("utf-8")).hexdigest()
     created_at = _utc_now()
@@ -57,26 +118,85 @@ def insert_episode(
     conn.execute(
         f"""
         INSERT INTO {table}
-        (task_id, condition, prompt, candidate_code, passed, test_log, created_at, code_hash)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        (
+            task_id, condition, prompt, candidate_code, passed, test_log, created_at, code_hash,
+            run_id, prompt_hash, retrieval_used, memory_sources, memory_top_score
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (task_id, condition, prompt, candidate_code, int(passed), test_log, created_at, code_hash),
+        (
+            task_id,
+            condition,
+            prompt,
+            candidate_code,
+            int(passed),
+            test_log,
+            created_at,
+            code_hash,
+            run_id,
+            prompt_hash,
+            int(retrieval_used),
+            memory_sources,
+            memory_top_score,
+        ),
     )
     conn.commit()
 
 
 def insert_episode_many(
     conn: sqlite3.Connection,
-    rows: list[tuple[str, str, str, str, bool, str]],
+    rows: list[tuple],
 ) -> None:
     if not rows:
         return
-    episode_rows: list[tuple[str, str, str, str, int, str, str, str]] = []
-    failure_rows: list[tuple[str, str, str, str, int, str, str, str]] = []
-    for task_id, condition, prompt, candidate_code, passed, test_log in rows:
+    episode_rows: list[tuple] = []
+    failure_rows: list[tuple] = []
+    for row in rows:
+        if len(row) == 6:
+            (
+                task_id,
+                condition,
+                prompt,
+                candidate_code,
+                passed,
+                test_log,
+            ) = row
+            run_id = None
+            prompt_hash = None
+            retrieval_used = 0
+            memory_sources = None
+            memory_top_score = None
+        else:
+            (
+                task_id,
+                condition,
+                prompt,
+                candidate_code,
+                passed,
+                test_log,
+                run_id,
+                prompt_hash,
+                retrieval_used,
+                memory_sources,
+                memory_top_score,
+            ) = row
         code_hash = hashlib.sha256(candidate_code.encode("utf-8")).hexdigest()
         created_at = _utc_now()
-        values = (task_id, condition, prompt, candidate_code, int(passed), test_log, created_at, code_hash)
+        values = (
+            task_id,
+            condition,
+            prompt,
+            candidate_code,
+            int(passed),
+            test_log,
+            created_at,
+            code_hash,
+            run_id,
+            prompt_hash,
+            int(retrieval_used),
+            memory_sources,
+            memory_top_score,
+        )
         if passed:
             episode_rows.append(values)
         else:
@@ -86,8 +206,11 @@ def insert_episode_many(
         conn.executemany(
             """
             INSERT INTO episodes
-            (task_id, condition, prompt, candidate_code, passed, test_log, created_at, code_hash)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            (
+                task_id, condition, prompt, candidate_code, passed, test_log, created_at, code_hash,
+                run_id, prompt_hash, retrieval_used, memory_sources, memory_top_score
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             episode_rows,
         )
@@ -95,8 +218,11 @@ def insert_episode_many(
         conn.executemany(
             """
             INSERT INTO failures
-            (task_id, condition, prompt, candidate_code, passed, test_log, created_at, code_hash)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            (
+                task_id, condition, prompt, candidate_code, passed, test_log, created_at, code_hash,
+                run_id, prompt_hash, retrieval_used, memory_sources, memory_top_score
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             failure_rows,
         )

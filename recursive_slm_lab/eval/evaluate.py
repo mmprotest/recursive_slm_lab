@@ -146,6 +146,16 @@ def evaluate_conditions(
         ],
         "memory_precision": memory_precision,
         "regression_check": regression_info,
+        "run_metadata": {
+            "backend": backend_name,
+            "model": config.model if backend_name == "openai" else config.hf_model_path or config.model,
+            "active_adapter": {
+                "name": active_adapter[0],
+                "path": active_adapter[1],
+            }
+            if active_adapter
+            else None,
+        },
     }
 
     created_at = datetime.now(timezone.utc).isoformat()
