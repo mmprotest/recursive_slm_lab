@@ -13,6 +13,7 @@ from .memory import (
     init_db,
     connect,
     consolidate,
+    consolidate_llm,
     get_active_adapter,
     fetch_seen_task_ids,
     wipe_memory,
@@ -20,7 +21,14 @@ from .memory import (
 from .tasks import load_tasks, validate_tasks, split_tasks
 from .loop import run_iteration
 from .eval import evaluate_conditions, plot_results
-from .training import train_lora_adapter, get_adapters, activate_adapter, deactivate_adapter
+from .training import (
+    train_lora_adapter,
+    get_adapters,
+    activate_adapter,
+    deactivate_adapter,
+    train_and_maybe_promote,
+    PromotionConfig,
+)
 
 app = typer.Typer(help="Recursive SLM Lab CLI")
 
@@ -177,6 +185,42 @@ def cli_consolidate(
     print("Consolidation complete.")
 
 
+@app.command("consolidate-llm")
+def cli_consolidate_llm(
+    db: str = typer.Option(..., help="Path to SQLite DB"),
+    backend: str = typer.Option("mock", help="mock|openai|localhf"),
+    heldout_size: int = typer.Option(40, help="Heldout size"),
+    task_limit: Optional[int] = typer.Option(None, help="Limit number of heldout tasks"),
+    sample_episodes: int = typer.Option(80, help="Number of recent passed episodes to sample"),
+    max_rules: int = typer.Option(20, help="Maximum combined rules/procedures"),
+    min_gain: float = typer.Option(0.01, help="Minimum pass@1 gain to accept"),
+) -> None:
+    config = Config(db_path=db, backend=backend)
+    conn = connect(db)
+    tasks = load_tasks()
+    _, heldout = split_tasks(tasks, heldout_size=heldout_size)
+    if task_limit is not None:
+        heldout = heldout[:task_limit]
+    backend_impl = _resolve_backend(config)
+    report = consolidate_llm(
+        conn,
+        backend_impl,
+        heldout_tasks=heldout,
+        sample_episodes=sample_episodes,
+        max_rules=max_rules,
+        min_gain=min_gain,
+        k=1,
+        max_tokens=config.max_tokens,
+        temperature=config.temperature,
+        top_p=config.top_p,
+        top_k=config.top_k,
+    )
+    conn.close()
+    if backend == "mock":
+        print("[yellow]Warning: mock backend may not generate useful rules.[/yellow]")
+    print(report)
+
+
 @app.command("eval")
 def cli_eval(
     db: str = typer.Option(..., help="Path to SQLite DB"),
@@ -239,6 +283,56 @@ def cli_train_lora(
     else:
         print(result.message)
         raise typer.Exit(code=1)
+
+
+@app.command("train-and-promote")
+def cli_train_and_promote(
+    db: str = typer.Option(..., help="Path to SQLite DB"),
+    out: str = typer.Option(..., help="Output adapter directory"),
+    heldout_size: int = typer.Option(40, help="Heldout size"),
+    heldout_limit: Optional[int] = typer.Option(None, help="Limit heldout tasks"),
+    regression_size: int = typer.Option(25, help="Regression task count"),
+    k: int = typer.Option(1, help="pass@k"),
+    min_improvement: float = typer.Option(0.02, help="Absolute pass@1 gain required"),
+    max_regression_drop: float = typer.Option(0.0, help="Allowed regression drop"),
+    backend: Optional[str] = typer.Option(None, help="Backend (must be localhf)"),
+    max_tokens: int = typer.Option(256, help="Max tokens"),
+    temperature: float = typer.Option(0.2, help="Sampling temperature"),
+    top_p: float = typer.Option(0.9, help="Top-p nucleus sampling"),
+    top_k: int = typer.Option(50, help="Top-k sampling"),
+) -> None:
+    config = Config(
+        db_path=db,
+        backend=backend or Config().backend,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        top_p=top_p,
+        top_k=top_k,
+    )
+    if config.backend != "localhf":
+        raise typer.BadParameter("train-and-promote requires --backend localhf")
+    conn = connect(db)
+    result = train_and_maybe_promote(
+        conn,
+        PromotionConfig(
+            out_dir=out,
+            heldout_size=heldout_size,
+            heldout_limit=heldout_limit,
+            regression_size=regression_size,
+            k=k,
+            min_improvement=min_improvement,
+            max_regression_drop=max_regression_drop,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
+            base_model_path=config.hf_model_path,
+        ),
+    )
+    conn.close()
+    print(result.message)
+    if not result.promoted and result.decision == "rejected":
+        print(result.metrics)
 
 
 @app.command("list-adapters")

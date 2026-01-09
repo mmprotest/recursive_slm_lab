@@ -15,6 +15,7 @@ class Task:
     signature: str
     reference_tests: str
     assert_tests: list[str] | None = None
+    tags: list[str] | None = None
 
 
 BUNDLED_PATH = Path(__file__).parent / "bundled_tasks.jsonl"
@@ -49,11 +50,20 @@ def validate_tasks(tasks: Iterable[Task]) -> None:
 
 
 def split_tasks(tasks: list[Task], heldout_size: int, seed: int = 1337) -> tuple[list[Task], list[Task]]:
+    heldout_only = [task for task in tasks if task.tags and "heldout_only" in task.tags]
+    remaining = [task for task in tasks if task not in heldout_only]
     hashed = []
-    for task in tasks:
+    for task in remaining:
         digest = hashlib.sha256(f"{seed}:{task.task_id}".encode("utf-8")).hexdigest()
         hashed.append((digest, task))
     hashed.sort(key=lambda item: item[0])
-    heldout = [task for _, task in hashed[:heldout_size]]
-    train_pool = [task for _, task in hashed[heldout_size:]]
+    needed = max(heldout_size - len(heldout_only), 0)
+    heldout_extra = [task for _, task in hashed[:needed]]
+    heldout = heldout_only + heldout_extra
+    train_pool = [task for _, task in hashed[needed:]]
+    if len(heldout) < heldout_size:
+        raise ValueError(
+            f"Not enough tasks to fill heldout_size={heldout_size} "
+            f"(only {len(heldout)} available)."
+        )
     return train_pool, heldout

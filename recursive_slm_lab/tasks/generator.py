@@ -34,8 +34,9 @@ def _make_task(
     signature: str,
     reference_tests: str,
     assert_tests: list[str],
+    tags: list[str] | None = None,
 ) -> dict[str, str | list[str]]:
-    return {
+    payload: dict[str, str | list[str]] = {
         "task_id": _task_id(function_name, prompt),
         "prompt": prompt,
         "function_name": function_name,
@@ -43,6 +44,9 @@ def _make_task(
         "reference_tests": reference_tests,
         "assert_tests": assert_tests,
     }
+    if tags:
+        payload["tags"] = tags
+    return payload
 
 
 def _add_const_task(k: int) -> dict[str, str | list[str]]:
@@ -463,6 +467,774 @@ def _bfs_distance_task() -> dict[str, str | list[str]]:
     return _make_task(prompt, "bfs_distance", "(graph, start, goal)", reference_tests, assert_tests)
 
 
+def _parse_date_iso_task() -> dict[str, str | list[str]]:
+    prompt = (
+        "Normalize date strings in either YYYY-MM-DD or YYYY/MM/DD format to YYYY-MM-DD."
+    )
+    reference_tests = textwrap.dedent(
+        """
+        import pytest
+        import random
+        from solution import *
+
+
+        def oracle(text):
+            text = text.strip()
+            if "-" in text:
+                parts = text.split("-")
+            else:
+                parts = text.split("/")
+            year, month, day = [p.zfill(2) for p in parts]
+            year = year.zfill(4)
+            return f"{year}-{month}-{day}"
+
+
+        def test_examples():
+            assert normalize_date("2024/3/5") == "2024-03-05"
+            assert normalize_date("1999-12-1") == "1999-12-01"
+
+
+        def test_randomized():
+            random.seed(1111)
+            for _ in range(50):
+                year = random.randint(1990, 2030)
+                month = random.randint(1, 12)
+                day = random.randint(1, 28)
+                if random.random() < 0.5:
+                    text = f"{year}/{month}/{day}"
+                else:
+                    text = f"{year}-{month}-{day}"
+                assert normalize_date(text) == oracle(text)
+        """
+    ).strip()
+    assert_tests = [
+        "assert normalize_date('2024/3/5') == '2024-03-05'",
+        "assert normalize_date('1999-12-1') == '1999-12-01'",
+    ]
+    return _make_task(prompt, "normalize_date", "(text)", reference_tests, assert_tests, tags=["heldout_only"])
+
+
+def _parse_key_value_task() -> dict[str, str | list[str]]:
+    prompt = "Parse a comma-separated list of key=value pairs into a dict of ints. Ignore empty items."
+    reference_tests = textwrap.dedent(
+        """
+        import pytest
+        from solution import *
+
+
+        def test_examples():
+            assert parse_kv_pairs("a=1,b=2") == {"a": 1, "b": 2}
+            assert parse_kv_pairs(" x=3 , y=4 ") == {"x": 3, "y": 4}
+            assert parse_kv_pairs("") == {}
+        """
+    ).strip()
+    assert_tests = [
+        "assert parse_kv_pairs('a=1,b=2') == {'a': 1, 'b': 2}",
+        "assert parse_kv_pairs('') == {}",
+    ]
+    return _make_task(prompt, "parse_kv_pairs", "(text)", reference_tests, assert_tests, tags=["heldout_only"])
+
+
+def _parse_csv_row_task() -> dict[str, str | list[str]]:
+    prompt = "Parse a CSV row with commas (no quoted fields). Return a list of trimmed fields."
+    reference_tests = textwrap.dedent(
+        """
+        import pytest
+        from solution import *
+
+
+        def test_examples():
+            assert parse_csv_row("a,b,c") == ["a", "b", "c"]
+            assert parse_csv_row(" 1, 2 ,3 ") == ["1", "2", "3"]
+            assert parse_csv_row("") == [""]
+        """
+    ).strip()
+    assert_tests = [
+        "assert parse_csv_row('a,b,c') == ['a', 'b', 'c']",
+        "assert parse_csv_row(' 1, 2 ,3 ') == ['1', '2', '3']",
+    ]
+    return _make_task(prompt, "parse_csv_row", "(text)", reference_tests, assert_tests)
+
+
+def _parse_env_block_task() -> dict[str, str | list[str]]:
+    prompt = "Parse lines of KEY=VALUE into a dict. Ignore blank lines and lines without '='."
+    reference_tests = textwrap.dedent(
+        """
+        import pytest
+        from solution import *
+
+
+        def test_examples():
+            text = "HOST=localhost\\nPORT=8080\\n\\nINVALID"
+            assert parse_env_block(text) == {"HOST": "localhost", "PORT": "8080"}
+            assert parse_env_block("") == {}
+        """
+    ).strip()
+    assert_tests = [
+        "assert parse_env_block('HOST=localhost\\nPORT=8080') == {'HOST': 'localhost', 'PORT': '8080'}",
+        "assert parse_env_block('') == {}",
+    ]
+    return _make_task(prompt, "parse_env_block", "(text)", reference_tests, assert_tests, tags=["heldout_only"])
+
+
+def _parse_range_list_task() -> dict[str, str | list[str]]:
+    prompt = "Parse a list like '1-3,5,7-8' into sorted integers [1,2,3,5,7,8]."
+    reference_tests = textwrap.dedent(
+        """
+        import pytest
+        from solution import *
+
+
+        def test_examples():
+            assert parse_ranges("1-3,5,7-8") == [1, 2, 3, 5, 7, 8]
+            assert parse_ranges("") == []
+            assert parse_ranges("4") == [4]
+        """
+    ).strip()
+    assert_tests = [
+        "assert parse_ranges('1-3,5,7-8') == [1, 2, 3, 5, 7, 8]",
+        "assert parse_ranges('') == []",
+    ]
+    return _make_task(prompt, "parse_ranges", "(text)", reference_tests, assert_tests, tags=["heldout_only"])
+
+
+def _parse_bool_tokens_task() -> dict[str, str | list[str]]:
+    prompt = "Parse tokens like 'true,false,1,0,yes,no' into booleans. Ignore empty tokens."
+    reference_tests = textwrap.dedent(
+        """
+        import pytest
+        from solution import *
+
+
+        def test_examples():
+            assert parse_bool_tokens("true,false,1,0") == [True, False, True, False]
+            assert parse_bool_tokens("yes, no, TRUE") == [True, False, True]
+        """
+    ).strip()
+    assert_tests = [
+        "assert parse_bool_tokens('true,false,1,0') == [True, False, True, False]",
+        "assert parse_bool_tokens('yes, no, TRUE') == [True, False, True]",
+    ]
+    return _make_task(prompt, "parse_bool_tokens", "(text)", reference_tests, assert_tests)
+
+
+def _parse_int_matrix_task() -> dict[str, str | list[str]]:
+    prompt = "Parse rows separated by ';' with comma-separated integers into a matrix."
+    reference_tests = textwrap.dedent(
+        """
+        import pytest
+        from solution import *
+
+
+        def test_examples():
+            assert parse_int_matrix("1,2;3,4") == [[1, 2], [3, 4]]
+            assert parse_int_matrix("5") == [[5]]
+            assert parse_int_matrix("") == []
+        """
+    ).strip()
+    assert_tests = [
+        "assert parse_int_matrix('1,2;3,4') == [[1, 2], [3, 4]]",
+        "assert parse_int_matrix('') == []",
+    ]
+    return _make_task(prompt, "parse_int_matrix", "(text)", reference_tests, assert_tests)
+
+
+def _normalize_whitespace_task() -> dict[str, str | list[str]]:
+    prompt = "Normalize whitespace by collapsing runs to single spaces and trimming."
+    reference_tests = textwrap.dedent(
+        """
+        import pytest
+        from solution import *
+
+
+        def test_examples():
+            assert normalize_whitespace("  hello   world ") == "hello world"
+            assert normalize_whitespace("\\n\\tfoo\\tbar  ") == "foo bar"
+        """
+    ).strip()
+    assert_tests = [
+        "assert normalize_whitespace('  hello   world ') == 'hello world'",
+        "assert normalize_whitespace('\\n\\tfoo\\tbar  ') == 'foo bar'",
+    ]
+    return _make_task(prompt, "normalize_whitespace", "(text)", reference_tests, assert_tests)
+
+
+def _parse_duration_minutes_task() -> dict[str, str | list[str]]:
+    prompt = "Convert a duration like '2h 30m' or '45m' into total minutes."
+    reference_tests = textwrap.dedent(
+        """
+        import pytest
+        from solution import *
+
+
+        def test_examples():
+            assert duration_to_minutes("2h 30m") == 150
+            assert duration_to_minutes("45m") == 45
+            assert duration_to_minutes("1h") == 60
+        """
+    ).strip()
+    assert_tests = [
+        "assert duration_to_minutes('2h 30m') == 150",
+        "assert duration_to_minutes('45m') == 45",
+    ]
+    return _make_task(prompt, "duration_to_minutes", "(text)", reference_tests, assert_tests, tags=["heldout_only"])
+
+
+def _parse_scored_pairs_task() -> dict[str, str | list[str]]:
+    prompt = "Parse 'name:score' pairs separated by commas into a dict of ints."
+    reference_tests = textwrap.dedent(
+        """
+        import pytest
+        from solution import *
+
+
+        def test_examples():
+            assert parse_scored_pairs("ann:1,bob:3") == {"ann": 1, "bob": 3}
+            assert parse_scored_pairs("") == {}
+        """
+    ).strip()
+    assert_tests = [
+        "assert parse_scored_pairs('ann:1,bob:3') == {'ann': 1, 'bob': 3}",
+        "assert parse_scored_pairs('') == {}",
+    ]
+    return _make_task(prompt, "parse_scored_pairs", "(text)", reference_tests, assert_tests)
+
+
+def _merge_intervals_task() -> dict[str, str | list[str]]:
+    prompt = "Merge overlapping intervals and return a list of non-overlapping intervals sorted by start."
+    reference_tests = textwrap.dedent(
+        """
+        import pytest
+        import random
+        from solution import *
+
+
+        def oracle(intervals):
+            if not intervals:
+                return []
+            intervals = sorted(intervals, key=lambda x: x[0])
+            merged = [intervals[0][:]]
+            for start, end in intervals[1:]:
+                last = merged[-1]
+                if start <= last[1]:
+                    last[1] = max(last[1], end)
+                else:
+                    merged.append([start, end])
+            return merged
+
+
+        def test_examples():
+            assert merge_intervals([[1, 3], [2, 4], [6, 8]]) == [[1, 4], [6, 8]]
+            assert merge_intervals([]) == []
+
+
+        def test_randomized():
+            random.seed(1212)
+            for _ in range(50):
+                intervals = []
+                for _ in range(random.randint(0, 6)):
+                    a = random.randint(0, 10)
+                    b = random.randint(a, a + random.randint(0, 5))
+                    intervals.append([a, b])
+                assert merge_intervals(intervals) == oracle(intervals)
+        """
+    ).strip()
+    assert_tests = [
+        "assert merge_intervals([[1, 3], [2, 4], [6, 8]]) == [[1, 4], [6, 8]]",
+        "assert merge_intervals([]) == []",
+    ]
+    return _make_task(prompt, "merge_intervals", "(intervals)", reference_tests, assert_tests, tags=["heldout_only"])
+
+
+def _run_length_encode_task() -> dict[str, str | list[str]]:
+    prompt = "Run-length encode a string into list of (char, count) pairs."
+    reference_tests = textwrap.dedent(
+        """
+        import pytest
+        from solution import *
+
+
+        def test_examples():
+            assert run_length_encode("aaabb") == [("a", 3), ("b", 2)]
+            assert run_length_encode("") == []
+        """
+    ).strip()
+    assert_tests = [
+        "assert run_length_encode('aaabb') == [('a', 3), ('b', 2)]",
+        "assert run_length_encode('') == []",
+    ]
+    return _make_task(prompt, "run_length_encode", "(text)", reference_tests, assert_tests)
+
+
+def _run_length_decode_task() -> dict[str, str | list[str]]:
+    prompt = "Decode a run-length list of (char, count) pairs back into a string."
+    reference_tests = textwrap.dedent(
+        """
+        import pytest
+        from solution import *
+
+
+        def test_examples():
+            assert run_length_decode([("a", 3), ("b", 2)]) == "aaabb"
+            assert run_length_decode([]) == ""
+        """
+    ).strip()
+    assert_tests = [
+        "assert run_length_decode([('a', 3), ('b', 2)]) == 'aaabb'",
+        "assert run_length_decode([]) == ''",
+    ]
+    return _make_task(prompt, "run_length_decode", "(pairs)", reference_tests, assert_tests)
+
+
+def _sliding_window_max_sum_task() -> dict[str, str | list[str]]:
+    prompt = "Return the maximum sum over all contiguous windows of size k."
+    reference_tests = textwrap.dedent(
+        """
+        import pytest
+        import random
+        from solution import *
+
+
+        def oracle(values, k):
+            if k <= 0 or k > len(values):
+                return None
+            return max(sum(values[i:i+k]) for i in range(len(values) - k + 1))
+
+
+        def test_examples():
+            assert max_window_sum([1, 2, 3, 4], 2) == 7
+            assert max_window_sum([5], 1) == 5
+            assert max_window_sum([1, 2], 3) is None
+
+
+        def test_randomized():
+            random.seed(1313)
+            for _ in range(50):
+                size = random.randint(1, 30)
+                values = [random.randint(-5, 5) for _ in range(size)]
+                k = random.randint(1, size)
+                assert max_window_sum(values, k) == oracle(values, k)
+        """
+    ).strip()
+    assert_tests = [
+        "assert max_window_sum([1, 2, 3, 4], 2) == 7",
+        "assert max_window_sum([1, 2], 3) is None",
+    ]
+    return _make_task(prompt, "max_window_sum", "(values, k)", reference_tests, assert_tests)
+
+
+def _longest_common_prefix_task() -> dict[str, str | list[str]]:
+    prompt = "Return the longest common prefix for a list of strings."
+    reference_tests = textwrap.dedent(
+        """
+        import pytest
+        from solution import *
+
+
+        def test_examples():
+            assert longest_common_prefix(["flower", "flow", "flight"]) == "fl"
+            assert longest_common_prefix(["dog", "racecar"]) == ""
+            assert longest_common_prefix([]) == ""
+        """
+    ).strip()
+    assert_tests = [
+        "assert longest_common_prefix(['flower', 'flow', 'flight']) == 'fl'",
+        "assert longest_common_prefix([]) == ''",
+    ]
+    return _make_task(prompt, "longest_common_prefix", "(words)", reference_tests, assert_tests)
+
+
+def _prefix_sums_task() -> dict[str, str | list[str]]:
+    prompt = "Return prefix sums for a list of numbers."
+    reference_tests = textwrap.dedent(
+        """
+        import pytest
+        from solution import *
+
+
+        def test_examples():
+            assert prefix_sums([1, 2, 3]) == [1, 3, 6]
+            assert prefix_sums([]) == []
+        """
+    ).strip()
+    assert_tests = [
+        "assert prefix_sums([1, 2, 3]) == [1, 3, 6]",
+        "assert prefix_sums([]) == []",
+    ]
+    return _make_task(prompt, "prefix_sums", "(values)", reference_tests, assert_tests)
+
+
+def _chunk_list_task() -> dict[str, str | list[str]]:
+    prompt = "Split a list into chunks of size n. The last chunk may be shorter."
+    reference_tests = textwrap.dedent(
+        """
+        import pytest
+        from solution import *
+
+
+        def test_examples():
+            assert chunk_list([1, 2, 3, 4, 5], 2) == [[1, 2], [3, 4], [5]]
+            assert chunk_list([], 3) == []
+        """
+    ).strip()
+    assert_tests = [
+        "assert chunk_list([1, 2, 3, 4, 5], 2) == [[1, 2], [3, 4], [5]]",
+        "assert chunk_list([], 3) == []",
+    ]
+    return _make_task(prompt, "chunk_list", "(values, n)", reference_tests, assert_tests)
+
+
+def _rotate_right_task() -> dict[str, str | list[str]]:
+    prompt = "Rotate a list right by k positions."
+    reference_tests = textwrap.dedent(
+        """
+        import pytest
+        from solution import *
+
+
+        def test_examples():
+            assert rotate_right([1, 2, 3, 4], 1) == [4, 1, 2, 3]
+            assert rotate_right([], 3) == []
+        """
+    ).strip()
+    assert_tests = [
+        "assert rotate_right([1, 2, 3, 4], 1) == [4, 1, 2, 3]",
+        "assert rotate_right([], 3) == []",
+    ]
+    return _make_task(prompt, "rotate_right", "(values, k)", reference_tests, assert_tests)
+
+
+def _k_smallest_task() -> dict[str, str | list[str]]:
+    prompt = "Return the k smallest numbers from a list, sorted ascending."
+    reference_tests = textwrap.dedent(
+        """
+        import pytest
+        import random
+        from solution import *
+
+
+        def test_examples():
+            assert k_smallest([5, 1, 3, 2], 2) == [1, 2]
+            assert k_smallest([], 3) == []
+
+
+        def test_randomized():
+            random.seed(1414)
+            for _ in range(40):
+                size = random.randint(0, 20)
+                values = [random.randint(-10, 10) for _ in range(size)]
+                k = random.randint(0, size) if size else 0
+                assert k_smallest(values, k) == sorted(values)[:k]
+        """
+    ).strip()
+    assert_tests = [
+        "assert k_smallest([5, 1, 3, 2], 2) == [1, 2]",
+        "assert k_smallest([], 3) == []",
+    ]
+    return _make_task(prompt, "k_smallest", "(values, k)", reference_tests, assert_tests)
+
+
+def _bugfix_is_sorted_task() -> dict[str, str | list[str]]:
+    prompt = "Fix the bug: is_sorted should return True for non-decreasing lists with equal neighbors."
+    reference_tests = textwrap.dedent(
+        """
+        import pytest
+        from solution import *
+
+
+        def test_examples():
+            assert is_sorted([1, 2, 2, 3]) is True
+            assert is_sorted([3, 2, 1]) is False
+            assert is_sorted([]) is True
+        """
+    ).strip()
+    assert_tests = [
+        "assert is_sorted([1, 2, 2, 3]) is True",
+        "assert is_sorted([3, 2, 1]) is False",
+    ]
+    return _make_task(prompt, "is_sorted", "(values)", reference_tests, assert_tests, tags=["heldout_only"])
+
+
+def _bugfix_count_words_task() -> dict[str, str | list[str]]:
+    prompt = "Fix the bug: count_words should ignore multiple spaces and tabs."
+    reference_tests = textwrap.dedent(
+        """
+        import pytest
+        from solution import *
+
+
+        def test_examples():
+            assert count_words("hello   world") == 2
+            assert count_words("  a\\t b\\n c ") == 3
+        """
+    ).strip()
+    assert_tests = [
+        "assert count_words('hello   world') == 2",
+        "assert count_words('  a\\t b\\n c ') == 3",
+    ]
+    return _make_task(prompt, "count_words", "(text)", reference_tests, assert_tests)
+
+
+def _bugfix_title_case_task() -> dict[str, str | list[str]]:
+    prompt = "Fix the bug: title_case should capitalize each word while preserving hyphenated parts."
+    reference_tests = textwrap.dedent(
+        """
+        import pytest
+        from solution import *
+
+
+        def test_examples():
+            assert title_case("hello world") == "Hello World"
+            assert title_case("state-of-the-art") == "State-Of-The-Art"
+        """
+    ).strip()
+    assert_tests = [
+        "assert title_case('hello world') == 'Hello World'",
+        "assert title_case('state-of-the-art') == 'State-Of-The-Art'",
+    ]
+    return _make_task(prompt, "title_case", "(text)", reference_tests, assert_tests)
+
+
+def _bugfix_unique_chars_task() -> dict[str, str | list[str]]:
+    prompt = "Fix the bug: unique_chars should treat uppercase and lowercase as the same."
+    reference_tests = textwrap.dedent(
+        """
+        import pytest
+        from solution import *
+
+
+        def test_examples():
+            assert unique_chars("AaBb") == ["a", "b"]
+            assert unique_chars("") == []
+        """
+    ).strip()
+    assert_tests = [
+        "assert unique_chars('AaBb') == ['a', 'b']",
+        "assert unique_chars('') == []",
+    ]
+    return _make_task(prompt, "unique_chars", "(text)", reference_tests, assert_tests, tags=["heldout_only"])
+
+
+def _bugfix_balance_parens_task() -> dict[str, str | list[str]]:
+    prompt = "Fix the bug: balance_parens should return True for empty input and ignore non-paren chars."
+    reference_tests = textwrap.dedent(
+        """
+        import pytest
+        from solution import *
+
+
+        def test_examples():
+            assert balance_parens("(a)b") is True
+            assert balance_parens("(()") is False
+            assert balance_parens("") is True
+        """
+    ).strip()
+    assert_tests = [
+        "assert balance_parens('(a)b') is True",
+        "assert balance_parens('(()') is False",
+    ]
+    return _make_task(prompt, "balance_parens", "(text)", reference_tests, assert_tests, tags=["heldout_only"])
+
+
+def _bugfix_median_task() -> dict[str, str | list[str]]:
+    prompt = "Fix the bug: median should average the two middle values for even-length lists."
+    reference_tests = textwrap.dedent(
+        """
+        import pytest
+        from solution import *
+
+
+        def test_examples():
+            assert median([1, 2, 3]) == 2
+            assert median([1, 2, 3, 4]) == 2.5
+        """
+    ).strip()
+    assert_tests = [
+        "assert median([1, 2, 3]) == 2",
+        "assert median([1, 2, 3, 4]) == 2.5",
+    ]
+    return _make_task(prompt, "median", "(values)", reference_tests, assert_tests, tags=["heldout_only"])
+
+
+def _max_pair_sum_task() -> dict[str, str | list[str]]:
+    prompt = "Return the maximum sum of any two numbers in the list."
+    reference_tests = textwrap.dedent(
+        """
+        import pytest
+        import random
+        from solution import *
+
+
+        def oracle(values):
+            if len(values) < 2:
+                return None
+            best = None
+            for i in range(len(values)):
+                for j in range(i + 1, len(values)):
+                    total = values[i] + values[j]
+                    if best is None or total > best:
+                        best = total
+            return best
+
+
+        def test_examples():
+            assert max_pair_sum([1, 2, 3]) == 5
+            assert max_pair_sum([5]) is None
+
+
+        def test_randomized():
+            random.seed(1515)
+            for _ in range(40):
+                size = random.randint(1, 60)
+                values = [random.randint(-50, 50) for _ in range(size)]
+                assert max_pair_sum(values) == oracle(values)
+        """
+    ).strip()
+    assert_tests = [
+        "assert max_pair_sum([1, 2, 3]) == 5",
+        "assert max_pair_sum([5]) is None",
+    ]
+    return _make_task(prompt, "max_pair_sum", "(values)", reference_tests, assert_tests)
+
+
+def _first_duplicate_task() -> dict[str, str | list[str]]:
+    prompt = "Return the first duplicated value in order of appearance, or None if all unique."
+    reference_tests = textwrap.dedent(
+        """
+        import pytest
+        from solution import *
+
+
+        def test_examples():
+            assert first_duplicate([1, 2, 3, 2, 1]) == 2
+            assert first_duplicate([1, 2, 3]) is None
+        """
+    ).strip()
+    assert_tests = [
+        "assert first_duplicate([1, 2, 3, 2, 1]) == 2",
+        "assert first_duplicate([1, 2, 3]) is None",
+    ]
+    return _make_task(prompt, "first_duplicate", "(values)", reference_tests, assert_tests)
+
+
+def _min_subarray_len_task() -> dict[str, str | list[str]]:
+    prompt = "Return the minimum length of a contiguous subarray with sum >= target, or 0 if none."
+    reference_tests = textwrap.dedent(
+        """
+        import pytest
+        import random
+        from solution import *
+
+
+        def oracle(values, target):
+            best = None
+            for i in range(len(values)):
+                total = 0
+                for j in range(i, len(values)):
+                    total += values[j]
+                    if total >= target:
+                        length = j - i + 1
+                        if best is None or length < best:
+                            best = length
+                        break
+            return best or 0
+
+
+        def test_examples():
+            assert min_subarray_len([2, 3, 1, 2, 4, 3], 7) == 2
+            assert min_subarray_len([1, 1, 1], 5) == 0
+
+
+        def test_randomized():
+            random.seed(1616)
+            for _ in range(30):
+                size = random.randint(1, 40)
+                values = [random.randint(1, 6) for _ in range(size)]
+                target = random.randint(1, 20)
+                assert min_subarray_len(values, target) == oracle(values, target)
+        """
+    ).strip()
+    assert_tests = [
+        "assert min_subarray_len([2, 3, 1, 2, 4, 3], 7) == 2",
+        "assert min_subarray_len([1, 1, 1], 5) == 0",
+    ]
+    return _make_task(prompt, "min_subarray_len", "(values, target)", reference_tests, assert_tests)
+
+
+def _longest_run_task() -> dict[str, str | list[str]]:
+    prompt = "Return the length of the longest run of identical values."
+    reference_tests = textwrap.dedent(
+        """
+        import pytest
+        from solution import *
+
+
+        def test_examples():
+            assert longest_run([1, 1, 2, 2, 2, 3]) == 3
+            assert longest_run([]) == 0
+        """
+    ).strip()
+    assert_tests = [
+        "assert longest_run([1, 1, 2, 2, 2, 3]) == 3",
+        "assert longest_run([]) == 0",
+    ]
+    return _make_task(prompt, "longest_run", "(values)", reference_tests, assert_tests)
+
+
+def _find_peak_task() -> dict[str, str | list[str]]:
+    prompt = "Return any peak element (>= neighbors) from a list, or None if empty."
+    reference_tests = textwrap.dedent(
+        """
+        import pytest
+        import random
+        from solution import *
+
+
+        def test_examples():
+            assert find_peak([1, 3, 2]) in {3}
+            assert find_peak([]) is None
+
+
+        def test_randomized():
+            random.seed(1717)
+            for _ in range(40):
+                size = random.randint(1, 30)
+                values = [random.randint(-5, 5) for _ in range(size)]
+                peak = find_peak(values)
+                assert peak in values
+                idx = values.index(peak)
+                left_ok = idx == 0 or values[idx] >= values[idx - 1]
+                right_ok = idx == len(values) - 1 or values[idx] >= values[idx + 1]
+                assert left_ok and right_ok
+        """
+    ).strip()
+    assert_tests = [
+        "assert find_peak([1, 3, 2]) in {3}",
+        "assert find_peak([]) is None",
+    ]
+    return _make_task(prompt, "find_peak", "(values)", reference_tests, assert_tests)
+
+
+def _window_distinct_count_task() -> dict[str, str | list[str]]:
+    prompt = "Count distinct values in each window of size k."
+    reference_tests = textwrap.dedent(
+        """
+        import pytest
+        from solution import *
+
+
+        def test_examples():
+            assert window_distinct_counts([1, 2, 1, 3, 2], 3) == [2, 3, 3]
+            assert window_distinct_counts([1, 1, 1], 2) == [1, 1]
+        """
+    ).strip()
+    assert_tests = [
+        "assert window_distinct_counts([1, 2, 1, 3, 2], 3) == [2, 3, 3]",
+        "assert window_distinct_counts([1, 1, 1], 2) == [1, 1]",
+    ]
+    return _make_task(prompt, "window_distinct_counts", "(values, k)", reference_tests, assert_tests)
+
+
 def _interleave_range(start: int, stop: int) -> list[int]:
     values = []
     for k in range(start, stop + 1):
@@ -481,6 +1253,37 @@ def generate_tasks(count: int) -> list[dict[str, str | list[str]]]:
         _parse_int_list_task(),
         _max_subarray_sum_task(),
         _bfs_distance_task(),
+        _parse_date_iso_task(),
+        _parse_key_value_task(),
+        _parse_csv_row_task(),
+        _parse_env_block_task(),
+        _parse_range_list_task(),
+        _parse_bool_tokens_task(),
+        _parse_int_matrix_task(),
+        _normalize_whitespace_task(),
+        _parse_duration_minutes_task(),
+        _parse_scored_pairs_task(),
+        _merge_intervals_task(),
+        _run_length_encode_task(),
+        _run_length_decode_task(),
+        _sliding_window_max_sum_task(),
+        _longest_common_prefix_task(),
+        _prefix_sums_task(),
+        _chunk_list_task(),
+        _rotate_right_task(),
+        _k_smallest_task(),
+        _bugfix_is_sorted_task(),
+        _bugfix_count_words_task(),
+        _bugfix_title_case_task(),
+        _bugfix_unique_chars_task(),
+        _bugfix_balance_parens_task(),
+        _bugfix_median_task(),
+        _max_pair_sum_task(),
+        _first_duplicate_task(),
+        _min_subarray_len_task(),
+        _longest_run_task(),
+        _find_peak_task(),
+        _window_distinct_count_task(),
     ]
 
     add_values = _interleave_range(1, 120)

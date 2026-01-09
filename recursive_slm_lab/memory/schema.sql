@@ -7,7 +7,12 @@ CREATE TABLE IF NOT EXISTS episodes (
     passed INTEGER NOT NULL,
     test_log TEXT NOT NULL,
     created_at TEXT NOT NULL,
-    code_hash TEXT NOT NULL
+    code_hash TEXT NOT NULL,
+    run_id INTEGER,
+    prompt_hash TEXT,
+    retrieval_used INTEGER DEFAULT 0,
+    memory_sources TEXT,
+    memory_top_score REAL
 );
 
 CREATE TABLE IF NOT EXISTS failures (
@@ -19,7 +24,31 @@ CREATE TABLE IF NOT EXISTS failures (
     passed INTEGER NOT NULL,
     test_log TEXT NOT NULL,
     created_at TEXT NOT NULL,
-    code_hash TEXT NOT NULL
+    code_hash TEXT NOT NULL,
+    run_id INTEGER,
+    prompt_hash TEXT,
+    retrieval_used INTEGER DEFAULT 0,
+    memory_sources TEXT,
+    memory_top_score REAL
+);
+
+CREATE TABLE IF NOT EXISTS runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    backend TEXT NOT NULL,
+    model TEXT NOT NULL,
+    adapter_name TEXT,
+    memory_enabled INTEGER NOT NULL,
+    semantic_enabled INTEGER NOT NULL,
+    learning_enabled INTEGER NOT NULL,
+    k INTEGER NOT NULL,
+    max_tokens INTEGER NOT NULL,
+    temperature REAL NOT NULL,
+    top_p REAL NOT NULL,
+    top_k INTEGER NOT NULL,
+    notes TEXT,
+    config_json TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS semantic_rules (
@@ -46,6 +75,15 @@ CREATE TABLE IF NOT EXISTS adapters (
     active INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS promotions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL,
+    previous_adapter_name TEXT,
+    candidate_adapter_name TEXT,
+    decision TEXT NOT NULL,
+    payload_json TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS eval_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at TEXT NOT NULL,
@@ -58,6 +96,12 @@ CREATE TABLE IF NOT EXISTS eval_runs (
 CREATE TABLE IF NOT EXISTS train_progress (
     task_id TEXT PRIMARY KEY,
     first_seen_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS regression_tasks (
+    task_id TEXT PRIMARY KEY,
+    rank INTEGER NOT NULL,
+    created_at TEXT NOT NULL
 );
 
 CREATE VIRTUAL TABLE IF NOT EXISTS episodes_fts USING fts5(

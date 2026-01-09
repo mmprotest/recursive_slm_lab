@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+import signal
 import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,6 +28,7 @@ def run_in_sandbox(
     Note: Python sandboxing is not perfectly safe. This applies a best-effort
     isolation via temp dirs, environment scrubbing, and no-network hints.
     """
+    strict_mode = os.environ.get("RSLM_STRICT_VERIFY") == "1"
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_path = Path(temp_dir)
         (temp_path / "solution.py").write_text(solution_code, encoding="utf-8")
@@ -42,39 +45,63 @@ def run_in_sandbox(
             (temp_path / "test_solution.py").write_text(test_code, encoding="utf-8")
 
         env = {
-            "PATH": os.environ.get("PATH", ""),
+            "PATH": "/usr/bin:/bin",
             "PYTHONNOUSERSITE": "1",
             "PYTHONHASHSEED": "0",
-            "PYTHONUNBUFFERED": "1",
-            "NO_NETWORK": "1",
             "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
             "PYTHONPATH": str(temp_path),
         }
 
+        command = (
+            [sys.executable, "harness.py"]
+            if use_fast
+            else [sys.executable, "-m", "pytest", "-q", "-p", "no:cov", "-p", "no:ddtrace"]
+        )
+
+        preexec_fn = None
+        if os.name == "posix":
+            import resource
+
+            def _apply_limits() -> None:
+                cpu_limit = timeout_s + 1
+                memory_limit = 512 * 1024 * 1024 if strict_mode else 1024 * 1024 * 1024
+                file_limit = 2 * 1024 * 1024 if strict_mode else 4 * 1024 * 1024
+                proc_limit = 8 if strict_mode else 16
+                resource.setrlimit(resource.RLIMIT_CPU, (cpu_limit, cpu_limit))
+                resource.setrlimit(resource.RLIMIT_AS, (memory_limit, memory_limit))
+                resource.setrlimit(resource.RLIMIT_FSIZE, (file_limit, file_limit))
+                resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))
+                resource.setrlimit(resource.RLIMIT_NPROC, (proc_limit, proc_limit))
+
+            preexec_fn = _apply_limits
+
+        proc = subprocess.Popen(
+            command,
+            cwd=temp_path,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+            preexec_fn=preexec_fn,
+        )
         try:
-            command = (
-                ["python", "harness.py"]
-                if use_fast
-                else ["python", "-m", "pytest", "-q", "-p", "no:cov", "-p", "no:ddtrace"]
-            )
-            proc = subprocess.run(
-                command,
-                cwd=temp_path,
-                env=env,
-                capture_output=True,
-                text=True,
-                timeout=timeout_s,
-            )
-            return SandboxResult(
-                passed=proc.returncode == 0,
-                stdout=proc.stdout,
-                stderr=proc.stderr,
-                returncode=proc.returncode,
-            )
-        except subprocess.TimeoutExpired as exc:
+            stdout, stderr = proc.communicate(timeout=timeout_s)
+        except subprocess.TimeoutExpired:
+            if os.name == "posix":
+                os.killpg(proc.pid, signal.SIGKILL)
+            else:
+                proc.kill()
+            stdout, stderr = proc.communicate()
             return SandboxResult(
                 passed=False,
-                stdout=exc.stdout or "",
-                stderr=f"Timeout after {timeout_s}s",
+                stdout=stdout or "",
+                stderr=f"Timeout after {timeout_s}s (process group killed)",
                 returncode=124,
             )
+        return SandboxResult(
+            passed=proc.returncode == 0,
+            stdout=stdout,
+            stderr=stderr,
+            returncode=proc.returncode,
+        )
