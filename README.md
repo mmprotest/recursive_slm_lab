@@ -136,7 +136,6 @@ rslm policy-list --db artifacts/memory.sqlite
 ```
 
 Note: Typer boolean flags use `--memory-enabled/--no-memory` (no extra `true/false` argument).
-The CLI also accepts `--memory-enabled true|false` for backward compatibility.
 
 ## Generate tasks
 
@@ -188,6 +187,25 @@ pip install -e ".[localhf]"
 export RSLM_BACKEND=localhf
 export RSLM_HF_MODEL_ID=Qwen/Qwen3-4B-Thinking-2507
 rslm policy-run-meta-iteration --db artifacts/memory.sqlite --backend localhf --heldout-size 40 --regression-size 25 --repeats 3
+```
+
+## Fast path recursion
+
+Use the new autonomous loop to run iteration, consolidate, optional policy improvement, optional adapter training,
+and robust evaluation in one command:
+
+```bash
+rslm self-improve --db artifacts/memory.sqlite --backend mock --cycles 3 --train-k 2 --train-limit 25 --heldout-size 40 \
+  --memory-enabled --verify-mode local
+```
+
+`rslm self-improve` defaults to Docker verification for safety when `--verify-mode` is not provided.
+
+Optional self-patching (uses a non-mock backend to propose diffs and only promotes when gates pass):
+
+```bash
+rslm self-patch --db artifacts/memory.sqlite --backend openai --cycles 1 --apply
+rslm self-improve --db artifacts/memory.sqlite --backend openai --enable-self-patch --cycles 1 --verify-mode docker
 ```
 
 ## Determinism defaults

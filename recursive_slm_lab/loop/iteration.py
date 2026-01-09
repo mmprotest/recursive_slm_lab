@@ -77,7 +77,7 @@ def run_iteration(
             },
         ),
     )
-    results: list[IterationResult] = []
+    iteration_results: list[IterationResult] = []
     for task in tasks:
         mark_task_seen(conn, task.task_id)
         memory_context = None
@@ -116,9 +116,9 @@ def run_iteration(
                 for candidate in candidates
             ]
             with ProcessPoolExecutor(max_workers=verify_workers) as executor:
-                results = list(executor.map(_verify_candidate_worker, args_list))
+                verifications = list(executor.map(_verify_candidate_worker, args_list))
         else:
-            results = [
+            verifications = [
                 verify_candidate(
                     candidate.code,
                     task.reference_tests,
@@ -127,7 +127,7 @@ def run_iteration(
                 )
                 for candidate in candidates
             ]
-        for candidate, verification in zip(candidates, results):
+        for candidate, verification in zip(candidates, verifications):
             prompt_hash = hashlib.sha256(candidate.prompt.encode("utf-8")).hexdigest()
             episode_rows.append(
                 (
@@ -147,8 +147,10 @@ def run_iteration(
             if verification.passed:
                 passed_any = True
         insert_episode_many(conn, episode_rows)
-        results.append(IterationResult(task_id=task.task_id, passed=passed_any, attempts=len(candidates)))
-    return results
+        iteration_results.append(
+            IterationResult(task_id=task.task_id, passed=passed_any, attempts=len(candidates))
+        )
+    return iteration_results
 
 
 def _resolve_verify_workers(verify_workers: int | None) -> int:
