@@ -17,8 +17,9 @@ def test_split_tasks_honors_heldout_only() -> None:
         Task("t5", "p5", "f5", "()", "tests", "lists", 1, ["assert True"]),
     ]
 
-    train_pool, heldout = split_tasks(tasks, heldout_size=3, seed=1)
+    train_pool, heldout, hidden = split_tasks(tasks, heldout_size=3, seed=1, hidden_tasks=[])
     heldout_ids = {task.task_id for task in heldout}
     assert {"t1", "t3"}.issubset(heldout_ids)
     assert len(heldout) == 3
     assert len(train_pool) == 2
+    assert hidden == []

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Optional
 import random
@@ -21,11 +22,21 @@ from .memory import (
     set_active_policy,
     fetch_seen_task_ids,
     wipe_memory,
+    list_rules,
+    list_procedures,
+    activate_rule,
+    deactivate_rule,
+    rollback_rules,
+    activate_procedure,
+    deactivate_procedure,
+    rollback_procedures,
 )
-from .tasks import load_tasks, validate_tasks, split_tasks
+from .tasks import load_tasks, load_hidden_tasks, validate_tasks, split_tasks
 from .loop import run_iteration
-from .eval import evaluate_conditions, plot_results
+from .eval import evaluate_conditions, plot_results, find_weak_tasks
+from .eval.robust import robust_eval_conditions
 from .meta import summarize_failures, propose_policy, evaluate_and_maybe_promote_policy
+from .meta.curriculum import mine_curriculum
 from .training import (
     train_lora_adapter,
     get_adapters,
@@ -34,8 +45,13 @@ from .training import (
     train_and_maybe_promote,
     PromotionConfig,
 )
+from .util import git_commit_hash, write_manifest
 
 app = typer.Typer(help="Recursive SLM Lab CLI")
+rules_app = typer.Typer(help="Manage semantic rules")
+procedures_app = typer.Typer(help="Manage procedures")
+app.add_typer(rules_app, name="rules")
+app.add_typer(procedures_app, name="procedures")
 
 
 def _resolve_backend(config: Config) -> object:
@@ -118,6 +134,33 @@ def cli_seed_tasks(
     print(f"Seeded and validated {len(tasks)} tasks at {output_path}")
 
 
+@app.command("seed-hidden-tasks")
+def cli_seed_hidden_tasks(
+    count: int = typer.Option(40, help="Number of hidden tasks to generate"),
+    out: Optional[Path] = typer.Option(None, help="Optional output path for JSONL"),
+) -> None:
+    if count < 12:
+        raise typer.BadParameter("--count must be at least 12")
+    output_path = out or (Path(__file__).parent / "tasks" / "hidden_tasks.jsonl")
+    from .tasks.generator import generate_constant_tasks, write_tasks
+
+    add_count = count // 2
+    mul_count = count - add_count
+    add_values = list(range(120, 120 + add_count))
+    mul_values = list(range(40, 40 + mul_count))
+    tasks_payload = generate_constant_tasks(
+        add_values,
+        mul_values,
+        difficulty=2,
+        add_range=300,
+        mul_range=200,
+    )
+    write_tasks(tasks_payload, output_path)
+    tasks = load_tasks(output_path)
+    validate_tasks(tasks)
+    print(f"Seeded and validated {len(tasks)} hidden tasks at {output_path}")
+
+
 @app.command("run-iteration")
 def cli_run_iteration(
     db: str = typer.Option(..., help="Path to SQLite DB"),
@@ -131,8 +174,16 @@ def cli_run_iteration(
     max_tokens: int = typer.Option(256, help="Max tokens"),
     top_p: float = typer.Option(0.9, help="Top-p nucleus sampling"),
     top_k: int = typer.Option(50, help="Top-k sampling"),
-    memory_enabled: bool = typer.Option(
-        False, "--memory-enabled/--no-memory", help="Enable memory retrieval"
+    memory_enabled: Optional[bool] = typer.Option(
+        None,
+        "--memory-enabled",
+        flag_value=True,
+        help="Enable memory retrieval (flag or true/false)",
+    ),
+    no_memory: bool = typer.Option(
+        False,
+        "--no-memory",
+        help="Disable memory retrieval",
     ),
     heldout_size: int = typer.Option(40, help="Heldout size for splitting"),
     task_limit: Optional[int] = typer.Option(None, help="Limit number of tasks"),
@@ -146,6 +197,12 @@ def cli_run_iteration(
         None, help="Parallel verification workers (defaults to RSLM_VERIFY_WORKERS)"
     ),
 ) -> None:
+    resolved_memory = False
+    if no_memory:
+        resolved_memory = False
+    elif memory_enabled is not None:
+        resolved_memory = memory_enabled
+
     config = Config(
         db_path=db,
         backend=backend or Config().backend,
@@ -157,8 +214,13 @@ def cli_run_iteration(
         top_k=top_k,
     )
 
-    all_tasks = load_tasks()
-    train_pool, heldout = split_tasks(all_tasks, heldout_size=heldout_size)
+    all_tasks = load_tasks(include_generated=config.include_generated_tasks)
+    hidden_tasks = load_hidden_tasks()
+    train_pool, heldout, _ = split_tasks(
+        all_tasks,
+        heldout_size=heldout_size,
+        hidden_tasks=hidden_tasks,
+    )
     selected = train_pool if mode == "trainpool" else heldout
 
     conn = connect(db)
@@ -178,7 +240,7 @@ def cli_run_iteration(
         temperature=temperature,
         top_p=top_p,
         top_k=top_k,
-        memory_enabled=memory_enabled,
+        memory_enabled=resolved_memory,
         condition=mode,
         policy=policy,
         db_path=db,
@@ -187,6 +249,23 @@ def cli_run_iteration(
     conn.close()
     passed = sum(1 for r in results if r.passed)
     print(f"Iteration complete. Passed {passed}/{len(results)} tasks.")
+    manifest_payload = {
+        "command": "run-iteration",
+        "config": {
+            "backend": config.backend,
+            "model": config.model,
+            "base_url": config.base_url,
+            "memory_enabled": resolved_memory,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "top_p": top_p,
+            "top_k": top_k,
+        },
+        "git_commit": git_commit_hash(),
+        "task_ids": [task.task_id for task in selected],
+        "results": {"passed": passed, "total": len(results)},
+    }
+    write_manifest("run-iteration", manifest_payload)
 
 
 @app.command("consolidate")
@@ -209,21 +288,32 @@ def cli_consolidate_llm(
     sample_episodes: int = typer.Option(80, help="Number of recent passed episodes to sample"),
     max_rules: int = typer.Option(20, help="Maximum combined rules/procedures"),
     min_gain: float = typer.Option(0.01, help="Minimum pass@1 gain to accept"),
+    max_hidden_regress: float = typer.Option(0.0, help="Max hidden regression tolerance"),
 ) -> None:
     config = Config(db_path=db, backend=backend)
     conn = connect(db)
-    tasks = load_tasks()
-    _, heldout = split_tasks(tasks, heldout_size=heldout_size)
+    tasks = load_tasks(include_generated=config.include_generated_tasks)
+    hidden_tasks = load_hidden_tasks()
+    _, heldout, hidden = split_tasks(
+        tasks,
+        heldout_size=heldout_size,
+        hidden_tasks=hidden_tasks,
+    )
     if task_limit is not None:
         heldout = heldout[:task_limit]
+    hidden = hidden[:task_limit] if task_limit is not None else hidden
+    weak_hidden_ids = set(find_weak_tasks(hidden))
+    hidden = [task for task in hidden if task.task_id not in weak_hidden_ids]
     backend_impl = _resolve_backend(config)
     report = consolidate_llm(
         conn,
         backend_impl,
         heldout_tasks=heldout,
+        hidden_tasks=hidden,
         sample_episodes=sample_episodes,
         max_rules=max_rules,
         min_gain=min_gain,
+        max_hidden_regress=max_hidden_regress,
         k=1,
         max_tokens=config.max_tokens,
         temperature=config.temperature,
@@ -233,6 +323,19 @@ def cli_consolidate_llm(
     conn.close()
     if backend == "mock":
         print("[yellow]Warning: mock backend may not generate useful rules.[/yellow]")
+    print(report)
+
+
+@app.command("mine-curriculum")
+def cli_mine_curriculum(
+    db: str = typer.Option(..., help="Path to SQLite DB"),
+    out: Path = typer.Option("artifacts/generated_tasks.jsonl", help="Output JSONL path"),
+    max_new: int = typer.Option(50, help="Maximum new tasks to generate"),
+    seed: int = typer.Option(1337, help="Seed for sampling"),
+) -> None:
+    conn = connect(db)
+    report = mine_curriculum(conn, out, max_new=max_new, seed=seed)
+    conn.close()
     print(report)
 
 
@@ -280,6 +383,71 @@ def cli_eval(
     )
     if output:
         print(f"Saved results to {output}")
+    print(payload)
+
+
+@app.command("eval-robust")
+def cli_eval_robust(
+    db: str = typer.Option(..., help="Path to SQLite DB"),
+    backend: str = typer.Option("mock", help="mock|openai|localhf"),
+    conditions: str = typer.Option("all", help="all or comma-separated list"),
+    k: int = typer.Option(1, help="pass@k"),
+    heldout_size: int = typer.Option(40, help="Heldout size"),
+    task_limit: Optional[int] = typer.Option(None, help="Limit number of heldout tasks"),
+    output: Optional[str] = typer.Option(None, help="Optional output JSON"),
+    max_tokens: int = typer.Option(256, help="Max tokens"),
+    temperature: float = typer.Option(0.2, help="Sampling temperature"),
+    top_p: float = typer.Option(0.9, help="Top-p nucleus sampling"),
+    top_k: int = typer.Option(50, help="Top-k sampling"),
+    policy_name: Optional[str] = typer.Option(None, help="Evaluate a specific policy by name"),
+    deterministic: bool = typer.Option(True, "--deterministic/--stochastic", help="Deterministic eval"),
+    repeats: int = typer.Option(1, help="Repeat evaluations for stability"),
+    seed: int = typer.Option(1337, help="Seed for deterministic eval"),
+) -> None:
+    if conditions == "all":
+        if backend == "mock":
+            condition_list = ["baseline", "memory", "semantic", "memory_learning"]
+        else:
+            condition_list = ["baseline", "memory", "learning", "memory_learning"]
+    else:
+        condition_list = [c.strip() for c in conditions.split(",") if c.strip()]
+    payload = robust_eval_conditions(
+        db_path=db,
+        backend_name=backend,
+        conditions=condition_list,
+        k=k,
+        heldout_size=heldout_size,
+        task_limit=task_limit,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        top_p=top_p,
+        top_k=top_k,
+        policy_name=policy_name,
+        repeats=repeats,
+        deterministic=deterministic,
+        seed=seed,
+    )
+    if output:
+        Path(output).parent.mkdir(parents=True, exist_ok=True)
+        Path(output).write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        print(f"Saved results to {output}")
+    write_manifest(
+        "eval-robust",
+        {
+            "command": "eval-robust",
+            "config": {
+                "backend": backend,
+                "model": Config().model,
+                "policy": policy_name or "active",
+                "deterministic": deterministic,
+                "repeats": repeats,
+            },
+            "git_commit": git_commit_hash(),
+            "splits": payload.get("splits", {}),
+            "metrics": payload.get("conditions", []),
+            "weak_hidden_task_ids": payload.get("weak_hidden_task_ids", []),
+        },
+    )
     print(payload)
 
 
@@ -492,6 +660,100 @@ def cli_rollback_adapter(
     deactivate_adapter(conn, name)
     conn.close()
     print(f"Rolled back adapter {name}")
+
+
+@rules_app.command("list")
+def cli_rules_list(
+    db: str = typer.Option(..., help="Path to SQLite DB"),
+    all: bool = typer.Option(False, "--all", help="Include inactive rules"),
+) -> None:
+    conn = connect(db)
+    rules = list_rules(conn, include_inactive=all)
+    conn.close()
+    for rule in rules:
+        status = "active" if rule.active else "inactive"
+        print(f"{rule.rule_id} {rule.key} ({status}) {rule.text}")
+
+
+@rules_app.command("activate")
+def cli_rules_activate(
+    db: str = typer.Option(..., help="Path to SQLite DB"),
+    rule_id: int = typer.Option(..., help="Rule id to activate"),
+) -> None:
+    conn = connect(db)
+    activate_rule(conn, rule_id)
+    conn.close()
+    print(f"Activated rule {rule_id}")
+
+
+@rules_app.command("deactivate")
+def cli_rules_deactivate(
+    db: str = typer.Option(..., help="Path to SQLite DB"),
+    rule_id: int = typer.Option(..., help="Rule id to deactivate"),
+) -> None:
+    conn = connect(db)
+    deactivate_rule(conn, rule_id)
+    conn.close()
+    print(f"Deactivated rule {rule_id}")
+
+
+@rules_app.command("rollback")
+def cli_rules_rollback(
+    db: str = typer.Option(..., help="Path to SQLite DB"),
+    to_timestamp: Optional[str] = typer.Option(None, help="Rollback to timestamp (ISO format)"),
+    to_rule_id: Optional[int] = typer.Option(None, help="Rollback to rule id"),
+) -> None:
+    conn = connect(db)
+    rollback_rules(conn, to_timestamp=to_timestamp, to_rule_id=to_rule_id)
+    conn.close()
+    print("Rolled back rules")
+
+
+@procedures_app.command("list")
+def cli_procedures_list(
+    db: str = typer.Option(..., help="Path to SQLite DB"),
+    all: bool = typer.Option(False, "--all", help="Include inactive procedures"),
+) -> None:
+    conn = connect(db)
+    procedures = list_procedures(conn, include_inactive=all)
+    conn.close()
+    for proc in procedures:
+        status = "active" if proc.active else "inactive"
+        print(f"{proc.procedure_id} {proc.pattern} ({status}) {proc.text}")
+
+
+@procedures_app.command("activate")
+def cli_procedures_activate(
+    db: str = typer.Option(..., help="Path to SQLite DB"),
+    procedure_id: int = typer.Option(..., help="Procedure id to activate"),
+) -> None:
+    conn = connect(db)
+    activate_procedure(conn, procedure_id)
+    conn.close()
+    print(f"Activated procedure {procedure_id}")
+
+
+@procedures_app.command("deactivate")
+def cli_procedures_deactivate(
+    db: str = typer.Option(..., help="Path to SQLite DB"),
+    procedure_id: int = typer.Option(..., help="Procedure id to deactivate"),
+) -> None:
+    conn = connect(db)
+    deactivate_procedure(conn, procedure_id)
+    conn.close()
+    print(f"Deactivated procedure {procedure_id}")
+
+
+@procedures_app.command("rollback")
+def cli_procedures_rollback(
+    db: str = typer.Option(..., help="Path to SQLite DB"),
+    to_timestamp: Optional[str] = typer.Option(None, help="Rollback to timestamp (ISO format)"),
+    to_procedure_id: Optional[int] = typer.Option(None, help="Rollback to procedure id"),
+) -> None:
+    conn = connect(db)
+    rollback_procedures(conn, to_timestamp=to_timestamp, to_procedure_id=to_procedure_id)
+    conn.close()
+    print("Rolled back procedures")
 
 
 @app.command("wipe-memory")

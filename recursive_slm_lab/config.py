@@ -16,6 +16,7 @@ def _get_env_int(name: str, default: str) -> int:
 class Config:
     db_path: str = os.getenv("RSLM_DB", "artifacts/memory.sqlite")
     backend: str = os.getenv("RSLM_BACKEND", "mock")
+    verify_mode: str = os.getenv("RSLM_VERIFY_MODE", "local")
     base_url: str | None = os.getenv("RSLM_BASE_URL")
     model: str = os.getenv("RSLM_MODEL", "mock-model")
     api_key: str | None = os.getenv("RSLM_API_KEY")
@@ -25,3 +26,4 @@ class Config:
     temperature: float = _get_env_float("RSLM_TEMPERATURE", "0.2")
     top_p: float = _get_env_float("RSLM_TOP_P", "0.9")
     top_k: int = _get_env_int("RSLM_TOP_K", "50")
+    include_generated_tasks: bool = os.getenv("RSLM_INCLUDE_GENERATED_TASKS", "0") == "1"

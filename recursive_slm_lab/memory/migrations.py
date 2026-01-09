@@ -105,6 +105,9 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         """
     )
 
+    _ensure_rules_schema(conn)
+    _ensure_procedures_schema(conn)
+
     if _table_exists(conn, "episodes"):
         if not _column_exists(conn, "episodes", "run_id"):
             conn.execute("ALTER TABLE episodes ADD COLUMN run_id INTEGER")
@@ -130,3 +133,159 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
             conn.execute("ALTER TABLE failures ADD COLUMN memory_top_score REAL")
 
     conn.commit()
+
+
+def _ensure_rules_schema(conn: sqlite3.Connection) -> None:
+    if not _table_exists(conn, "semantic_rules"):
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS semantic_rules (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                key TEXT NOT NULL,
+                rule_text TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                origin_episode_ids TEXT NOT NULL,
+                evidence_count INTEGER NOT NULL,
+                eval_snapshot TEXT,
+                active INTEGER NOT NULL,
+                superseded_by INTEGER,
+                last_verified_at TEXT NOT NULL
+            )
+            """
+        )
+        _ensure_rules_fts(conn)
+        return
+    if _column_exists(conn, "semantic_rules", "created_at"):
+        _ensure_rules_fts(conn)
+        return
+    conn.execute("ALTER TABLE semantic_rules RENAME TO semantic_rules_old")
+    conn.execute(
+        """
+        CREATE TABLE semantic_rules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            key TEXT NOT NULL,
+            rule_text TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            origin_episode_ids TEXT NOT NULL,
+            evidence_count INTEGER NOT NULL,
+            eval_snapshot TEXT,
+            active INTEGER NOT NULL,
+            superseded_by INTEGER,
+            last_verified_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO semantic_rules (key, rule_text, created_at, origin_episode_ids, evidence_count, eval_snapshot, active, superseded_by, last_verified_at)
+        SELECT key, rule_text, last_verified_at, '[]', evidence_count, NULL, 1, NULL, last_verified_at
+        FROM semantic_rules_old
+        """
+    )
+    conn.execute("DROP TABLE semantic_rules_old")
+    _ensure_rules_fts(conn)
+
+
+def _ensure_procedures_schema(conn: sqlite3.Connection) -> None:
+    if not _table_exists(conn, "procedures"):
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS procedures (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                pattern TEXT NOT NULL,
+                recipe_text TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                origin_episode_ids TEXT NOT NULL,
+                evidence_count INTEGER NOT NULL,
+                eval_snapshot TEXT,
+                active INTEGER NOT NULL,
+                superseded_by INTEGER,
+                last_verified_at TEXT NOT NULL
+            )
+            """
+        )
+        _ensure_procedures_fts(conn)
+        return
+    if _column_exists(conn, "procedures", "created_at"):
+        _ensure_procedures_fts(conn)
+        return
+    conn.execute("ALTER TABLE procedures RENAME TO procedures_old")
+    conn.execute(
+        """
+        CREATE TABLE procedures (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            pattern TEXT NOT NULL,
+            recipe_text TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            origin_episode_ids TEXT NOT NULL,
+            evidence_count INTEGER NOT NULL,
+            eval_snapshot TEXT,
+            active INTEGER NOT NULL,
+            superseded_by INTEGER,
+            last_verified_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO procedures (pattern, recipe_text, created_at, origin_episode_ids, evidence_count, eval_snapshot, active, superseded_by, last_verified_at)
+        SELECT pattern, recipe_text, last_verified_at, '[]', evidence_count, NULL, 1, NULL, last_verified_at
+        FROM procedures_old
+        """
+    )
+    conn.execute("DROP TABLE procedures_old")
+    _ensure_procedures_fts(conn)
+
+
+def _ensure_rules_fts(conn: sqlite3.Connection) -> None:
+    conn.execute("DROP TABLE IF EXISTS rules_fts")
+    conn.execute("DROP TRIGGER IF EXISTS rules_ai")
+    conn.execute("DROP TRIGGER IF EXISTS rules_ad")
+    conn.execute(
+        """
+        CREATE VIRTUAL TABLE IF NOT EXISTS rules_fts USING fts5(
+            rule_text, content='semantic_rules', content_rowid='id'
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS rules_ai AFTER INSERT ON semantic_rules BEGIN
+            INSERT INTO rules_fts(rowid, rule_text) VALUES (new.id, new.rule_text);
+        END;
+        """
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS rules_ad AFTER DELETE ON semantic_rules BEGIN
+            INSERT INTO rules_fts(rules_fts, rowid, rule_text) VALUES ('delete', old.id, old.rule_text);
+        END;
+        """
+    )
+
+
+def _ensure_procedures_fts(conn: sqlite3.Connection) -> None:
+    conn.execute("DROP TABLE IF EXISTS procedures_fts")
+    conn.execute("DROP TRIGGER IF EXISTS procedures_ai")
+    conn.execute("DROP TRIGGER IF EXISTS procedures_ad")
+    conn.execute(
+        """
+        CREATE VIRTUAL TABLE IF NOT EXISTS procedures_fts USING fts5(
+            recipe_text, content='procedures', content_rowid='id'
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS procedures_ai AFTER INSERT ON procedures BEGIN
+            INSERT INTO procedures_fts(rowid, recipe_text) VALUES (new.id, new.recipe_text);
+        END;
+        """
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS procedures_ad AFTER DELETE ON procedures BEGIN
+            INSERT INTO procedures_fts(procedures_fts, rowid, recipe_text) VALUES ('delete', old.id, old.recipe_text);
+        END;
+        """
+    )

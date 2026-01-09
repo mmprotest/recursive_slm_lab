@@ -60,3 +60,42 @@ def test_migrations_add_new_columns(tmp_path: Path) -> None:
     ).fetchone()
     assert cache_table is not None
     conn.close()
+
+
+def test_migrations_upgrade_rules_and_procedures(tmp_path: Path) -> None:
+    db_path = tmp_path / "legacy_rules.sqlite"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE semantic_rules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            key TEXT UNIQUE NOT NULL,
+            rule_text TEXT NOT NULL,
+            evidence_count INTEGER NOT NULL,
+            last_verified_at TEXT NOT NULL
+        );
+        CREATE TABLE procedures (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            pattern TEXT UNIQUE NOT NULL,
+            recipe_text TEXT NOT NULL,
+            evidence_count INTEGER NOT NULL,
+            last_verified_at TEXT NOT NULL
+        );
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    conn = connect(db_path)
+    rule_columns = {row[1] for row in conn.execute("PRAGMA table_info(semantic_rules)").fetchall()}
+    proc_columns = {row[1] for row in conn.execute("PRAGMA table_info(procedures)").fetchall()}
+    for column in [
+        "created_at",
+        "origin_episode_ids",
+        "eval_snapshot",
+        "active",
+        "superseded_by",
+    ]:
+        assert column in rule_columns
+        assert column in proc_columns
+    conn.close()

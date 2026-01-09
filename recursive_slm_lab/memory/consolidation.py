@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import datetime, timezone
 
@@ -98,32 +99,57 @@ def consolidate(conn: sqlite3.Connection, min_evidence: int = 3) -> None:
         evidence_count = len(task_ids)
         if evidence_count < min_evidence:
             continue
+        origin_ids = _episode_ids_for_tasks(conn, task_ids)
+        eval_snapshot = json.dumps({"heldout": None, "hidden": None})
+        cursor = conn.execute(
+            """
+            INSERT INTO semantic_rules
+            (key, rule_text, created_at, origin_episode_ids, evidence_count, eval_snapshot, active, superseded_by, last_verified_at)
+            VALUES (?, ?, ?, ?, ?, ?, 1, NULL, ?)
+            """,
+            (key, rule_text[key], now, json.dumps(origin_ids), evidence_count, eval_snapshot, now),
+        )
+        new_id = int(cursor.lastrowid)
         conn.execute(
             """
-            INSERT INTO semantic_rules (key, rule_text, evidence_count, last_verified_at)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(key) DO UPDATE SET
-                rule_text=excluded.rule_text,
-                evidence_count=excluded.evidence_count,
-                last_verified_at=excluded.last_verified_at
+            UPDATE semantic_rules SET active = 0, superseded_by = ?
+            WHERE key = ? AND id != ? AND active = 1
             """,
-            (key, rule_text[key], evidence_count, now),
+            (new_id, key, new_id),
         )
 
     for key, task_ids in proc_evidence.items():
         evidence_count = len(task_ids)
         if evidence_count < min_evidence:
             continue
+        origin_ids = _episode_ids_for_tasks(conn, task_ids)
+        eval_snapshot = json.dumps({"heldout": None, "hidden": None})
+        cursor = conn.execute(
+            """
+            INSERT INTO procedures
+            (pattern, recipe_text, created_at, origin_episode_ids, evidence_count, eval_snapshot, active, superseded_by, last_verified_at)
+            VALUES (?, ?, ?, ?, ?, ?, 1, NULL, ?)
+            """,
+            (key, proc_text[key], now, json.dumps(origin_ids), evidence_count, eval_snapshot, now),
+        )
+        new_id = int(cursor.lastrowid)
         conn.execute(
             """
-            INSERT INTO procedures (pattern, recipe_text, evidence_count, last_verified_at)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(pattern) DO UPDATE SET
-                recipe_text=excluded.recipe_text,
-                evidence_count=excluded.evidence_count,
-                last_verified_at=excluded.last_verified_at
+            UPDATE procedures SET active = 0, superseded_by = ?
+            WHERE pattern = ? AND id != ? AND active = 1
             """,
-            (key, proc_text[key], evidence_count, now),
+            (new_id, key, new_id),
         )
 
     conn.commit()
+
+
+def _episode_ids_for_tasks(conn: sqlite3.Connection, task_ids: set[str]) -> list[int]:
+    if not task_ids:
+        return []
+    placeholders = ",".join("?" for _ in task_ids)
+    rows = conn.execute(
+        f"SELECT id FROM episodes WHERE task_id IN ({placeholders}) AND passed = 1",
+        tuple(task_ids),
+    ).fetchall()
+    return [int(row[0]) for row in rows]

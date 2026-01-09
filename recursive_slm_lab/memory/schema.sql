@@ -53,17 +53,27 @@ CREATE TABLE IF NOT EXISTS runs (
 
 CREATE TABLE IF NOT EXISTS semantic_rules (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    key TEXT UNIQUE NOT NULL,
+    key TEXT NOT NULL,
     rule_text TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    origin_episode_ids TEXT NOT NULL,
     evidence_count INTEGER NOT NULL,
+    eval_snapshot TEXT,
+    active INTEGER NOT NULL,
+    superseded_by INTEGER,
     last_verified_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS procedures (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    pattern TEXT UNIQUE NOT NULL,
+    pattern TEXT NOT NULL,
     recipe_text TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    origin_episode_ids TEXT NOT NULL,
     evidence_count INTEGER NOT NULL,
+    eval_snapshot TEXT,
+    active INTEGER NOT NULL,
+    superseded_by INTEGER,
     last_verified_at TEXT NOT NULL
 );
 
