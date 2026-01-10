@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import importlib.util
+import math
 from pathlib import Path
 
 from ..memory import fetch_passed_episodes, register_adapter
@@ -100,9 +101,16 @@ def train_lora_adapter(conn, out_dir: str, base_model_path: str | None) -> Train
 
     tokenized = dataset.map(tokenize, remove_columns=["prompt", "code"])
 
-    model = AutoModelForCausalLM.from_pretrained(base_model_path)
+    dtype = torch.bfloat16 if (torch.cuda.is_available() and torch.cuda.is_bf16_supported()) else (
+        torch.float16 if torch.cuda.is_available() else torch.float32
+    )
+    load_kwargs = {"low_cpu_mem_usage": True, "torch_dtype": dtype}
+    if torch.cuda.is_available():
+        load_kwargs["device_map"] = {"": 0}
+    model = AutoModelForCausalLM.from_pretrained(base_model_path, **load_kwargs)
     if torch.cuda.is_available():
         model.gradient_checkpointing_enable()
+        model.config.use_cache = False
 
     target_modules = _resolve_target_modules(model)
     lora_config = LoraConfig(
@@ -130,12 +138,16 @@ def train_lora_adapter(conn, out_dir: str, base_model_path: str | None) -> Train
         batch["labels"] = torch.tensor(labels)
         return batch
 
+    per_device_bs = 1
+    grad_acc = 8
+    steps_per_epoch = math.ceil(len(tokenized) / per_device_bs / grad_acc)
+    max_steps = max(10, min(60, steps_per_epoch * 3))
+
     training_args = TrainingArguments(
         output_dir=out_dir,
-        per_device_train_batch_size=1,
-        gradient_accumulation_steps=8,
-        num_train_epochs=1,
-        max_steps=200,
+        per_device_train_batch_size=per_device_bs,
+        gradient_accumulation_steps=grad_acc,
+        max_steps=max_steps,
         learning_rate=2e-4,
         logging_steps=5,
         save_strategy="no",
