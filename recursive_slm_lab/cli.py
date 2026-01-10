@@ -340,8 +340,16 @@ def cli_self_improve(
     ),
     artifacts_dir: str = typer.Option("artifacts_self_improve", help="Artifact output directory"),
     verify_mode: Optional[str] = typer.Option(None, help="Override verification mode (local|docker)"),
+    log_level: Optional[str] = typer.Option(
+        None,
+        "--log-level",
+        help="Log level (DEBUG, INFO, WARNING, ERROR)",
+        case_sensitive=False,
+    ),
     seed: int = typer.Option(1337, help="Seed"),
 ) -> None:
+    if log_level:
+        setup_logging(log_level)
     resolved_memory = False
     if no_memory:
         resolved_memory = False
@@ -375,9 +383,11 @@ def cli_self_improve(
     if resolved_self_patch and config.backend == "mock":
         raise typer.BadParameter("--enable-self-patch requires a non-mock backend")
 
-    backend_impl = _resolve_backend(config)
+    backend_impl = _resolve_backend(config) if resolved_self_patch else None
 
     def _run_self_patch(context: dict) -> None:
+        if backend_impl is None:
+            raise RuntimeError("Self-patch backend not initialized")
         run_self_patch(
             backend=backend_impl,
             repo_root=Path.cwd(),
