@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import gc
 import importlib.util
 import logging
 import re
@@ -160,8 +161,12 @@ class LocalHFBackend(LLMBackend):
                 **load_kwargs,
             )
         self._base_model = model
+        self._peft_model = None
+        self._active_adapter = None
         if self.adapter_path:
-            model = PeftModel.from_pretrained(self._base_model, self.adapter_path)
+            self._peft_model = PeftModel.from_pretrained(self._base_model, self.adapter_path)
+            model = self._peft_model
+            self._active_adapter = self.adapter_path
         self._model = model
         self._device = device
         LOGGER.info(
@@ -173,19 +178,67 @@ class LocalHFBackend(LLMBackend):
             self.adapter_path or "none",
         )
 
+    def _stable_adapter_name(self, adapter_path: str) -> str:
+        name = adapter_path.strip("/").split("/")[-1] or "adapter"
+        return re.sub(r"[^A-Za-z0-9_.-]+", "_", name)
+
     def set_adapter(self, adapter_path: str | None) -> None:
-        if adapter_path == self.adapter_path:
+        if adapter_path == self._active_adapter:
             return
         from peft import PeftModel
 
+        previous = self._active_adapter
         if adapter_path is None:
             self._model = self._base_model
             self.adapter_path = None
-            LOGGER.info("LocalHF adapter deactivated.")
+            self._active_adapter = None
+            LOGGER.info("LocalHF adapter cleared (previous=%s).", previous or "none")
             return
-        self._model = PeftModel.from_pretrained(self._base_model, adapter_path)
+
+        multi_adapter = self._peft_model is not None and hasattr(self._peft_model, "load_adapter")
+        if self._peft_model is None:
+            self._peft_model = PeftModel.from_pretrained(self._base_model, adapter_path)
+            self._model = self._peft_model
+            self.adapter_path = adapter_path
+            self._active_adapter = adapter_path
+            LOGGER.info(
+                "LocalHF adapter activated: %s (previous=%s, multi_adapter=%s)",
+                adapter_path,
+                previous or "none",
+                False,
+            )
+            return
+
+        if multi_adapter:
+            adapter_name = self._stable_adapter_name(adapter_path)
+            self._peft_model.load_adapter(adapter_path, adapter_name=adapter_name)
+            self._peft_model.set_adapter(adapter_name)
+            self._model = self._peft_model
+            self.adapter_path = adapter_path
+            self._active_adapter = adapter_path
+            LOGGER.info(
+                "LocalHF adapter activated: %s (previous=%s, multi_adapter=%s)",
+                adapter_path,
+                previous or "none",
+                True,
+            )
+            return
+
+        self._peft_model = None
+        self._model = self._base_model
+        gc.collect()
+        if self._torch.cuda.is_available():
+            self._torch.cuda.empty_cache()
+        self._peft_model = PeftModel.from_pretrained(self._base_model, adapter_path)
+        self._model = self._peft_model
         self.adapter_path = adapter_path
-        LOGGER.info("LocalHF adapter activated: %s", adapter_path)
+        self._active_adapter = adapter_path
+        LOGGER.info(
+            "LocalHF adapter activated: %s (previous=%s, multi_adapter=%s)",
+            adapter_path,
+            previous or "none",
+            False,
+        )
 
     def _resolve_dtype(self, device: str):
         if device == "cpu":
