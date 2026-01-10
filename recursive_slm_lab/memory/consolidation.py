@@ -3,6 +3,9 @@ from __future__ import annotations
 import json
 import sqlite3
 from datetime import datetime, timezone
+import logging
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _utc_now() -> str:
@@ -107,6 +110,7 @@ def consolidate(
             continue
         origin_ids = _episode_ids_for_tasks(conn, task_ids)
         eval_payload = json.dumps(eval_snapshot)
+        LOGGER.info("Writing rule to memory: %s (evidence=%d)", key, evidence_count)
         cursor = conn.execute(
             """
             INSERT INTO semantic_rules
@@ -130,6 +134,7 @@ def consolidate(
             continue
         origin_ids = _episode_ids_for_tasks(conn, task_ids)
         eval_payload = json.dumps(eval_snapshot)
+        LOGGER.info("Writing procedure to memory: %s (evidence=%d)", key, evidence_count)
         cursor = conn.execute(
             """
             INSERT INTO procedures

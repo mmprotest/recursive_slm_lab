@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import hashlib
 import os
 from concurrent.futures import ProcessPoolExecutor
+import logging
 
 from ..llm.localhf import LocalHFBackend
 from ..llm.mock import MockBackend
@@ -15,6 +16,7 @@ from ..tasks import Task
 from ..llm.base import LLMBackend
 from .sampling import generate_candidates
 
+LOGGER = logging.getLogger(__name__)
 
 @dataclass
 class IterationResult:
@@ -79,17 +81,37 @@ def run_iteration(
             },
         ),
     )
+    LOGGER.info(
+        "Starting iteration: condition=%s tasks=%d k=%d memory_enabled=%s",
+        condition,
+        len(tasks),
+        k,
+        memory_enabled,
+    )
     iteration_results: list[IterationResult] = []
     for task_index, task in enumerate(tasks):
         mark_task_seen(conn, task.task_id)
+        LOGGER.info(
+            "Task %s (%s) condition=%s",
+            task.task_id,
+            task.function_name,
+            condition,
+        )
         memory_context = None
         if memory_enabled:
+            LOGGER.info("Task %s: retrieving memory", task.task_id)
             memory_context = retrieve_memory(
                 conn,
                 task.prompt,
                 policy=policy,
                 function_name=task.function_name,
             )
+            LOGGER.info(
+                "Task %s: retrieved %d memory hits",
+                task.task_id,
+                len(memory_context.hits) if memory_context else 0,
+            )
+        LOGGER.info("Task %s: generating candidates", task.task_id)
         candidates = generate_candidates(
             backend,
             task_prompt=task.prompt,
@@ -113,6 +135,7 @@ def run_iteration(
             memory_sources = ",".join(sources)
             memory_top_score = min(hit.score for hit in memory_context.hits)
         episode_rows: list[tuple] = []
+        LOGGER.info("Task %s: verifying %d candidates", task.task_id, len(candidates))
         if verify_workers and verify_workers > 1 and len(candidates) > 1:
             args_list = [
                 (candidate.code, task.reference_tests, task.assert_tests, db_path)
@@ -130,6 +153,12 @@ def run_iteration(
                 )
                 for candidate in candidates
             ]
+        first_failure = next((v for v in verifications if not v.passed), None)
+        if first_failure:
+            error_type = _summarize_error(first_failure.log)
+            LOGGER.info("Task %s: verification failed (%s)", task.task_id, error_type)
+        else:
+            LOGGER.info("Task %s: verification passed", task.task_id)
         for candidate, verification in zip(candidates, verifications):
             prompt_hash = hashlib.sha256(candidate.prompt.encode("utf-8")).hexdigest()
             episode_rows.append(
@@ -149,6 +178,7 @@ def run_iteration(
             )
             if verification.passed:
                 passed_any = True
+        LOGGER.info("Task %s: writing %d episode(s) to memory", task.task_id, len(episode_rows))
         insert_episode_many(conn, episode_rows)
         iteration_results.append(
             IterationResult(task_id=task.task_id, passed=passed_any, attempts=len(candidates))
@@ -176,3 +206,14 @@ def _verify_candidate_worker(args: tuple[str, str, list[str] | None, str | None]
         assert_tests,
         db_path=db_path,
     )
+
+
+def _summarize_error(log: str) -> str:
+    if not log:
+        return "unknown_error"
+    _, _, stderr = log.partition("STDERR:\n")
+    for line in stderr.splitlines():
+        stripped = line.strip()
+        if stripped:
+            return stripped.split(":")[0]
+    return "unknown_error"

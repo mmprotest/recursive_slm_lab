@@ -73,6 +73,28 @@ def extract_python_function_code(text: str, function_name: str) -> str:
     return "\n".join(code_lines).strip()
 
 
+def _build_generate_kwargs(
+    input_ids,
+    attention_mask,
+    max_tokens: int,
+    temperature: float,
+    top_p: float,
+    top_k: int,
+) -> dict:
+    gen_kwargs = {
+        "input_ids": input_ids,
+        "attention_mask": attention_mask,
+        "max_new_tokens": max_tokens,
+    }
+    do_sample = temperature > 0
+    gen_kwargs["do_sample"] = do_sample
+    if do_sample:
+        gen_kwargs["temperature"] = temperature
+        gen_kwargs["top_p"] = top_p
+        gen_kwargs["top_k"] = top_k
+    return gen_kwargs
+
+
 @dataclass
 class LocalHFBackend(LLMBackend):
     model_path: str
@@ -131,6 +153,14 @@ class LocalHFBackend(LLMBackend):
             model = PeftModel.from_pretrained(model, self.adapter_path)
         self._model = model
         self._device = device
+        LOGGER.info(
+            "Loaded LocalHF model=%s device=%s dtype=%s device_map=%s adapter=%s",
+            self.model_path,
+            device,
+            dtype,
+            device_map,
+            self.adapter_path or "none",
+        )
 
     def _resolve_dtype(self, device: str):
         if device == "cpu":
@@ -164,17 +194,25 @@ class LocalHFBackend(LLMBackend):
         input_len = input_ids.shape[-1]
         input_ids = input_ids.to(self._model.device)
         attention_mask = self._torch.ones_like(input_ids)
-        gen_kwargs = {
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
-            "max_new_tokens": max_tokens,
-        }
-        do_sample = temperature > 0
-        gen_kwargs["do_sample"] = do_sample
-        if do_sample:
-            gen_kwargs["temperature"] = temperature
-            gen_kwargs["top_p"] = top_p
-            gen_kwargs["top_k"] = top_k
+        gen_kwargs = _build_generate_kwargs(
+            input_ids,
+            attention_mask,
+            max_tokens,
+            temperature,
+            top_p,
+            top_k,
+        )
+        LOGGER.info(
+            "LocalHF generate: do_sample=%s max_tokens=%s",
+            gen_kwargs["do_sample"],
+            max_tokens,
+        )
+        LOGGER.debug(
+            "LocalHF sampling params: temperature=%s top_p=%s top_k=%s",
+            temperature,
+            top_p,
+            top_k,
+        )
         with self._torch.no_grad():
             outputs = self._model.generate(**gen_kwargs)
         generated = outputs[0, input_len:]
