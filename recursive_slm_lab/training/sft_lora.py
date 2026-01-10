@@ -4,10 +4,14 @@ from dataclasses import dataclass
 import importlib.util
 import math
 from pathlib import Path
+import logging
 
 from ..memory import fetch_passed_episodes, register_adapter
 from ..tasks import load_tasks
 from ..loop.prompts import build_prompt
+from ..util.timing import log_timing
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass
@@ -142,6 +146,14 @@ def train_lora_adapter(conn, out_dir: str, base_model_path: str | None) -> Train
     grad_acc = 8
     steps_per_epoch = math.ceil(len(tokenized) / per_device_bs / grad_acc)
     max_steps = max(10, min(60, steps_per_epoch * 3))
+    LOGGER.info(
+        "LoRA max_steps=%d derived from dataset=%d per_device_bs=%d grad_acc=%d steps_per_epoch=%d",
+        max_steps,
+        len(tokenized),
+        per_device_bs,
+        grad_acc,
+        steps_per_epoch,
+    )
 
     training_args = TrainingArguments(
         output_dir=out_dir,
@@ -157,7 +169,9 @@ def train_lora_adapter(conn, out_dir: str, base_model_path: str | None) -> Train
     )
 
     trainer = Trainer(model=model, args=training_args, train_dataset=tokenized, data_collator=collate)
-    trainer.train()
+    LOGGER.info("Starting LoRA training")
+    with log_timing(LOGGER, "LoRA training"):
+        trainer.train()
 
     adapter_path = Path(out_dir)
     adapter_path.mkdir(parents=True, exist_ok=True)

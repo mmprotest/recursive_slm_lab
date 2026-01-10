@@ -47,13 +47,25 @@ from .training import (
     PromotionConfig,
 )
 from .self_patch import run_self_patch
-from .util import git_commit_hash, write_manifest
+from .util import git_commit_hash, write_manifest, setup_logging
 
 app = typer.Typer(help="Recursive SLM Lab CLI")
 rules_app = typer.Typer(help="Manage semantic rules")
 procedures_app = typer.Typer(help="Manage procedures")
 app.add_typer(rules_app, name="rules")
 app.add_typer(procedures_app, name="procedures")
+
+
+@app.callback()
+def main(
+    log_level: str = typer.Option(
+        "INFO",
+        "--log-level",
+        help="Log level (DEBUG, INFO, WARNING, ERROR)",
+        case_sensitive=False,
+    ),
+) -> None:
+    setup_logging(log_level)
 
 
 def _resolve_backend(config: Config) -> object:
@@ -790,11 +802,19 @@ def cli_policy_run_meta_iteration(
     current_policy = get_active_policy(conn)
     failure_summary = summarize_failures(conn, limit=failures)
     constraints = {
-        "retrieval_top_n": "[0, 10]",
-        "temperature": "[0, 1.5]",
-        "k": "[1, 16]",
-        "top_p": "[0.1, 1.0]",
-        "top_k": "[0, 200]",
+        "retrieval_top_n": (0, 10),
+        "sampling_train": {
+            "k": (1, 16),
+            "temperature": (0.0, 1.5),
+            "top_p": (0.1, 1.0),
+            "top_k": (0, 200),
+        },
+        "sampling_eval": {
+            "k": (1, 16),
+            "temperature": (0.0, 1.5),
+            "top_p": (0.1, 1.0),
+            "top_k": (0, 200),
+        },
     }
     proposal = propose_policy(
         backend_impl,

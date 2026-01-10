@@ -3,11 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import sqlite3
+import logging
 
 from ..config import Config
 from ..memory import connect
 from .sandbox import run_in_sandbox
 
+LOGGER = logging.getLogger(__name__)
 
 @dataclass
 class VerificationResult:
@@ -34,9 +36,11 @@ def verify_candidate(
     if conn is not None:
         cached = _fetch_cache(conn, cache_key)
         if cached is not None:
+            LOGGER.debug("Verification cache hit.")
             if should_close:
                 conn.close()
             return cached
+    LOGGER.debug("Verification cache miss. Running sandbox.")
     result = run_in_sandbox(solution_code, test_code, assert_tests=assert_tests)
     log = f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
     verification = VerificationResult(passed=result.passed, log=log)

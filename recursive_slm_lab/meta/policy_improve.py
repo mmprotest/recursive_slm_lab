@@ -5,11 +5,13 @@ import re
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import logging
 
 from ..eval.robust import evaluate_policy_pair, paired_bootstrap_ci, split_for_gating
 from ..policy import Policy, DEFAULT_POLICY
 from ..memory import register_policy, set_active_policy
 
+LOGGER = logging.getLogger(__name__)
 
 @dataclass
 class PolicyProposal:
@@ -33,43 +35,76 @@ def propose_policy(
     recent_failures_summary: str,
     constraints: dict,
 ) -> PolicyProposal:
-    prompt = (
-        "You are proposing a new policy JSON for recursive self-improvement. "
-        "Return STRICT JSON matching the Policy schema exactly. "
-        "Do not include commentary.\n\n"
-        f"Current policy JSON:\n{current_policy.to_json()}\n\n"
-        f"Failure summary:\n{recent_failures_summary}\n\n"
-        f"Constraints:\n{json.dumps(constraints, indent=2)}\n"
+    schema_example = {
+        "retrieval_top_n": 3,
+        "sampling_train": {"k": 2, "temperature": 0.2, "top_p": 0.9, "top_k": 50},
+        "sampling_eval": {"k": 1, "temperature": 0.0, "top_p": 1.0, "top_k": 0},
+    }
+    base_prompt = (
+        "You are proposing a new policy JSON for recursive self-improvement.\n"
+        "Constraints:\n"
+        f"{json.dumps(constraints, indent=2)}\n\n"
+        "Current policy JSON:\n"
+        f"{current_policy.to_json()}\n\n"
+        "Required JSON schema example:\n"
+        f"{json.dumps(schema_example, indent=2)}\n\n"
+        "Failure summary:\n"
+        f"{recent_failures_summary}\n\n"
+        "Output ONLY the JSON object."
     )
     attempts = 0
     last_error: str | None = None
-    while attempts < 3:
+    last_output: str = ""
+    prompt = base_prompt
+    while attempts < 8:
         attempts += 1
+        LOGGER.info("Policy proposal attempt %d", attempts)
         response = backend.generate(
             [
                 {
                     "role": "system",
-                    "content": "You MUST output a single JSON object and nothing else. Start with '{' and end with '}'.",
+                    "content": (
+                        "You MUST output exactly one JSON object and nothing else. "
+                        "No prose, no Markdown, no code fences. Start with '{' and end with '}'."
+                    ),
                 },
                 {"role": "user", "content": prompt},
             ],
-            max_tokens=512,
-            temperature=0.0,
-            top_p=1.0,
-            top_k=0,
+            max_tokens=1024,
+            temperature=0.2,
+            top_p=0.9,
+            top_k=50,
         )
+        last_output = response.text
         raw = _extract_json_text(response.text)
         try:
-            payload = json.loads(raw)
-            merged = _merge_policy_dict(current_policy.to_dict(), payload)
-            validated = _validate_policy_dict(merged)
-            policy = Policy.from_dict(validated)
-            return PolicyProposal(policy=policy, raw_json=json.dumps(validated), attempts=attempts)
-        except (json.JSONDecodeError, KeyError, ValueError) as exc:
+            if raw == "":
+                raise ValueError("No JSON object found in model output")
+            try:
+                payload = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"JSON decode error: {exc}") from exc
+            validated_payload = _validate_policy_json(payload, constraints)
+            merged = _merge_policy_dict(current_policy.to_dict(), validated_payload)
+            policy = Policy.from_dict(merged)
+            return PolicyProposal(
+                policy=policy,
+                raw_json=json.dumps(merged),
+                attempts=attempts,
+            )
+        except ValueError as exc:
             last_error = str(exc)
-            prompt = prompt + f"\n\nYour last output was invalid JSON. Error: {exc}. Return ONLY valid JSON now."
-            continue
-    raise ValueError(f"Policy proposal failed after {attempts} attempts: {last_error}")
+            LOGGER.info("Policy proposal validation failed: %s", exc)
+            LOGGER.debug("Policy proposal raw output: %s", response.text)
+        prompt = base_prompt + "\n\nYour output was invalid. Output ONLY the JSON object. No commentary."
+    snippet = last_output[:400]
+    message = (
+        "Policy proposal failed after "
+        f"{attempts} attempts. Last error: {last_error}. "
+        f"Final output snippet: {snippet}"
+    )
+    LOGGER.error(message)
+    raise ValueError(message)
 
 
 def evaluate_and_maybe_promote_policy(
@@ -202,19 +237,42 @@ def evaluate_and_maybe_promote_policy(
     )
 
 
-def _validate_policy_dict(payload: dict) -> dict:
-    payload = dict(payload)
-    payload["retrieval_top_n"] = int(_clamp(payload.get("retrieval_top_n", 0), 0, 10))
-    payload["retrieval_extra_terms_mode"] = payload.get("retrieval_extra_terms_mode", "none")
-    payload["retrieval_match_mode"] = payload.get("retrieval_match_mode", "and")
+def _validate_policy_json(obj: dict, constraints: dict) -> dict:
+    if not isinstance(obj, dict):
+        raise ValueError("Policy JSON must be an object")
+    payload = dict(obj)
+    if "retrieval_top_n" not in payload:
+        raise ValueError("Missing required field: retrieval_top_n")
+    retrieval_range = constraints["retrieval_top_n"]
+    try:
+        payload["retrieval_top_n"] = int(_clamp(payload["retrieval_top_n"], *retrieval_range))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Invalid field: retrieval_top_n") from exc
+
     for key in ("sampling_train", "sampling_eval"):
-        block = payload.get(key, {})
-        block["k"] = int(_clamp(block.get("k", 1), 1, 16))
-        block["temperature"] = float(_clamp(block.get("temperature", 0.0), 0.0, 1.5))
-        block["top_p"] = float(_clamp(block.get("top_p", 1.0), 0.1, 1.0))
-        block["top_k"] = int(_clamp(block.get("top_k", 0), 0, 200))
-        if key == "sampling_eval":
-            block["k"] = max(1, min(block["k"], 16))
+        if key not in payload or not isinstance(payload[key], dict):
+            raise ValueError(f"Missing required field: {key}")
+        block = dict(payload[key])
+        for field in ("k", "temperature", "top_p", "top_k"):
+            if field not in block:
+                raise ValueError(f"Missing required field: {key}.{field}")
+        ranges = constraints[key]
+        try:
+            block["k"] = int(_clamp(block["k"], *ranges["k"]))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Invalid field: {key}.k") from exc
+        try:
+            block["temperature"] = float(_clamp(block["temperature"], *ranges["temperature"]))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Invalid field: {key}.temperature") from exc
+        try:
+            block["top_p"] = float(_clamp(block["top_p"], *ranges["top_p"]))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Invalid field: {key}.top_p") from exc
+        try:
+            block["top_k"] = int(_clamp(block["top_k"], *ranges["top_k"]))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Invalid field: {key}.top_k") from exc
         payload[key] = block
     return payload
 
@@ -277,7 +335,7 @@ def _extract_json_text(text: str) -> str:
             continue
         if isinstance(payload, dict):
             return text[idx : idx + end]
-    return text
+    return ""
 
 
 def _utc_now() -> str:

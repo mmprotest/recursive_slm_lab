@@ -41,3 +41,18 @@ def test_localhf_dependency_guard(monkeypatch: pytest.MonkeyPatch) -> None:
     message = str(excinfo.value)
     assert "LocalHF dependencies missing" in message
     assert "pip install -e '.[localhf]'" in message
+
+
+def test_localhf_generate_kwargs_no_sampling_when_temperature_zero() -> None:
+    gen_kwargs = localhf._build_generate_kwargs(
+        input_ids=[1, 2, 3],
+        attention_mask=[1, 1, 1],
+        max_tokens=64,
+        temperature=0.0,
+        top_p=0.9,
+        top_k=50,
+    )
+    assert gen_kwargs["do_sample"] is False
+    assert "temperature" not in gen_kwargs
+    assert "top_p" not in gen_kwargs
+    assert "top_k" not in gen_kwargs
