@@ -89,19 +89,23 @@ def _build_generate_kwargs(
         "max_new_tokens": max_tokens,
     }
     do_sample = temperature > 0
-    gen_kwargs["do_sample"] = do_sample
     if do_sample:
+        gen_kwargs["do_sample"] = True
         gen_kwargs["temperature"] = temperature
         gen_kwargs["top_p"] = top_p
         gen_kwargs["top_k"] = top_k
     else:
         from transformers import GenerationConfig
 
+        gen_kwargs["do_sample"] = False
+        for key in ("temperature", "top_p", "top_k", "typical_p", "min_p"):
+            gen_kwargs.pop(key, None)
         greedy_config = GenerationConfig.from_model_config(model_config)
         greedy_config.do_sample = False
         greedy_config.temperature = 1.0
         greedy_config.top_p = 1.0
         greedy_config.top_k = 0
+        greedy_config.num_beams = 1
         gen_kwargs["generation_config"] = greedy_config
     return gen_kwargs
 
@@ -282,9 +286,10 @@ class LocalHFBackend(LLMBackend):
             self._model.config,
         )
         LOGGER.info(
-            "LocalHF generate: do_sample=%s max_tokens=%s",
-            gen_kwargs["do_sample"],
-            max_tokens,
+            "LocalHF generate: do_sample=%s generation_config=%s kwargs_keys=%s",
+            gen_kwargs.get("do_sample"),
+            "generation_config" in gen_kwargs,
+            sorted(gen_kwargs.keys()),
         )
         LOGGER.debug("LocalHF generate kwargs keys: %s", sorted(gen_kwargs.keys()))
         LOGGER.debug(
