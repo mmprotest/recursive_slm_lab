@@ -343,12 +343,15 @@ def cli_self_improve(
     log_level: Optional[str] = typer.Option(
         None,
         "--log-level",
-        help="Log level (DEBUG, INFO, WARNING, ERROR)",
+        help=(
+            "Set logging level for this command (DEBUG, INFO, WARNING, ERROR). "
+            "Overrides global if provided."
+        ),
         case_sensitive=False,
     ),
     seed: int = typer.Option(1337, help="Seed"),
 ) -> None:
-    if log_level:
+    if log_level is not None:
         setup_logging(log_level)
     resolved_memory = False
     if no_memory:
