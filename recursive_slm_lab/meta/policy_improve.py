@@ -47,7 +47,10 @@ def propose_policy(
         attempts += 1
         response = backend.generate(
             [
-                {"role": "system", "content": "Return strict JSON only."},
+                {
+                    "role": "system",
+                    "content": "You MUST output a single JSON object and nothing else. Start with '{' and end with '}'.",
+                },
                 {"role": "user", "content": prompt},
             ],
             max_tokens=512,
@@ -64,6 +67,7 @@ def propose_policy(
             return PolicyProposal(policy=policy, raw_json=json.dumps(validated), attempts=attempts)
         except (json.JSONDecodeError, KeyError, ValueError) as exc:
             last_error = str(exc)
+            prompt = prompt + f"\n\nYour last output was invalid JSON. Error: {exc}. Return ONLY valid JSON now."
             continue
     raise ValueError(f"Policy proposal failed after {attempts} attempts: {last_error}")
 
@@ -256,11 +260,23 @@ def _clamp(value: float, low: float, high: float) -> float:
 
 def _extract_json_text(text: str) -> str:
     text = text.strip()
-    if text.startswith("{") and text.endswith("}"):
-        return text
-    match = re.search(r"\{.*\}", text, re.DOTALL)
-    if match:
-        return match.group(0)
+    try:
+        payload = json.loads(text)
+        if isinstance(payload, dict):
+            return text
+    except json.JSONDecodeError:
+        pass
+
+    decoder = json.JSONDecoder()
+    for idx, char in enumerate(text):
+        if char != "{":
+            continue
+        try:
+            payload, end = decoder.raw_decode(text[idx:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            return text[idx : idx + end]
     return text
 
 
