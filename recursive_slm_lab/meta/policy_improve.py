@@ -55,6 +55,7 @@ def propose_policy(
     attempts = 0
     last_error: str | None = None
     last_output: str = ""
+    last_raw: str | None = None
     prompt = base_prompt
     while attempts < 8:
         attempts += 1
@@ -77,6 +78,7 @@ def propose_policy(
         )
         last_output = response.text
         raw = _extract_json_text(response.text)
+        last_raw = raw or None
         try:
             if raw == "":
                 raise ValueError("No JSON object found in model output")
@@ -94,14 +96,17 @@ def propose_policy(
             )
         except ValueError as exc:
             last_error = str(exc)
-            LOGGER.info("Policy proposal validation failed: %s", exc)
+            LOGGER.info("Policy proposal validation failed: %s", _compact_error_message(last_error))
+            LOGGER.debug("Policy proposal validation detail: %s", last_error)
             LOGGER.debug("Policy proposal raw output: %s", response.text)
-        prompt = base_prompt + "\n\nYour output was invalid. Output ONLY the JSON object. No commentary."
+        prompt = _build_retry_prompt(base_prompt, last_error)
     snippet = last_output[:400]
+    raw_snippet = (last_raw or "")[:400]
     message = (
         "Policy proposal failed after "
         f"{attempts} attempts. Last error: {last_error}. "
-        f"Final output snippet: {snippet}"
+        f"Final output snippet: {snippet}. "
+        f"Extracted JSON snippet: {raw_snippet}"
     )
     LOGGER.error(message)
     raise ValueError(message)
@@ -131,11 +136,13 @@ def evaluate_and_maybe_promote_policy(
     current_policy = _active_policy(conn)
     previous_policy_name = _active_policy_name(conn)
 
+    greedy_baseline = _force_greedy_eval(current_policy)
+    greedy_candidate = _force_greedy_eval(candidate_policy)
     baseline_heldout, candidate_heldout = evaluate_policy_pair(
         backend,
         heldout,
-        current_policy,
-        candidate_policy,
+        greedy_baseline,
+        greedy_candidate,
         max_tokens=256,
         deterministic=deterministic,
         seed=seed,
@@ -145,8 +152,8 @@ def evaluate_and_maybe_promote_policy(
     baseline_hidden, candidate_hidden = evaluate_policy_pair(
         backend,
         hidden,
-        current_policy,
-        candidate_policy,
+        greedy_baseline,
+        greedy_candidate,
         max_tokens=256,
         deterministic=deterministic,
         seed=seed,
@@ -244,10 +251,11 @@ def _validate_policy_json(obj: dict, constraints: dict) -> dict:
     if "retrieval_top_n" not in payload:
         raise ValueError("Missing required field: retrieval_top_n")
     retrieval_range = constraints["retrieval_top_n"]
-    try:
-        payload["retrieval_top_n"] = int(_clamp(payload["retrieval_top_n"], *retrieval_range))
-    except (TypeError, ValueError) as exc:
-        raise ValueError("Invalid field: retrieval_top_n") from exc
+    payload["retrieval_top_n"] = _coerce_int(
+        "retrieval_top_n",
+        payload["retrieval_top_n"],
+        *retrieval_range,
+    )
 
     for key in ("sampling_train", "sampling_eval"):
         if key not in payload or not isinstance(payload[key], dict):
@@ -257,24 +265,110 @@ def _validate_policy_json(obj: dict, constraints: dict) -> dict:
             if field not in block:
                 raise ValueError(f"Missing required field: {key}.{field}")
         ranges = constraints[key]
-        try:
-            block["k"] = int(_clamp(block["k"], *ranges["k"]))
-        except (TypeError, ValueError) as exc:
-            raise ValueError(f"Invalid field: {key}.k") from exc
-        try:
-            block["temperature"] = float(_clamp(block["temperature"], *ranges["temperature"]))
-        except (TypeError, ValueError) as exc:
-            raise ValueError(f"Invalid field: {key}.temperature") from exc
-        try:
-            block["top_p"] = float(_clamp(block["top_p"], *ranges["top_p"]))
-        except (TypeError, ValueError) as exc:
-            raise ValueError(f"Invalid field: {key}.top_p") from exc
-        try:
-            block["top_k"] = int(_clamp(block["top_k"], *ranges["top_k"]))
-        except (TypeError, ValueError) as exc:
-            raise ValueError(f"Invalid field: {key}.top_k") from exc
+        block["k"] = _coerce_int(f"{key}.k", block["k"], *ranges["k"])
+        block["temperature"] = _coerce_float(
+            f"{key}.temperature",
+            block["temperature"],
+            *ranges["temperature"],
+        )
+        block["top_p"] = _coerce_float(f"{key}.top_p", block["top_p"], *ranges["top_p"])
+        block["top_k"] = _coerce_int(f"{key}.top_k", block["top_k"], *ranges["top_k"])
         payload[key] = block
     return payload
+
+
+def _coerce_int(field: str, value, low: float, high: float) -> int:
+    if isinstance(value, bool):
+        raise ValueError(_invalid_field_message(field, value))
+    if isinstance(value, int):
+        coerced = value
+    elif isinstance(value, float):
+        if not value.is_integer():
+            raise ValueError(_invalid_field_message(field, value))
+        coerced = int(value)
+    elif isinstance(value, str):
+        stripped = value.strip()
+        if stripped == "":
+            raise ValueError(_invalid_field_message(field, value))
+        try:
+            parsed = float(stripped)
+        except ValueError as exc:
+            raise ValueError(_invalid_field_message(field, value)) from exc
+        if not parsed.is_integer():
+            raise ValueError(_invalid_field_message(field, value))
+        coerced = int(parsed)
+    else:
+        raise ValueError(_invalid_field_message(field, value))
+    return int(_clamp(coerced, low, high))
+
+
+def _coerce_float(field: str, value, low: float, high: float) -> float:
+    if isinstance(value, bool):
+        raise ValueError(_invalid_field_message(field, value))
+    if isinstance(value, (int, float)):
+        coerced = float(value)
+    elif isinstance(value, str):
+        stripped = value.strip()
+        if stripped == "":
+            raise ValueError(_invalid_field_message(field, value))
+        try:
+            coerced = float(stripped)
+        except ValueError as exc:
+            raise ValueError(_invalid_field_message(field, value)) from exc
+    else:
+        raise ValueError(_invalid_field_message(field, value))
+    return float(_clamp(coerced, low, high))
+
+
+def _invalid_field_message(field: str, value) -> str:
+    return f"Invalid field: {field} (value={value!r}, type={type(value).__name__})"
+
+
+def _compact_error_message(error: str) -> str:
+    if " (" in error:
+        return error.split(" (", 1)[0]
+    return error
+
+
+def _build_retry_prompt(base_prompt: str, error: str | None) -> str:
+    if not error:
+        return base_prompt + "\n\nYour output was invalid. Output ONLY the JSON object. No commentary."
+    field = _extract_error_field(error)
+    example = _field_example(field) if field else None
+    extra = f"\n\nValidation error: {error}"
+    if example:
+        extra += f"\n{example}"
+    extra += "\nOutput ONLY the JSON object. No commentary."
+    return base_prompt + extra
+
+
+def _extract_error_field(error: str) -> str | None:
+    match = re.search(r"Invalid field: ([^\s(]+)", error)
+    if match:
+        return match.group(1)
+    match = re.search(r"Missing required field: ([^\s]+)", error)
+    if match:
+        return match.group(1)
+    return None
+
+
+def _field_example(field: str | None) -> str | None:
+    if not field:
+        return None
+    examples = {
+        "retrieval_top_n": 'Example: "retrieval_top_n": 3  (integer, not a string)',
+        "sampling_train": 'Example: "sampling_train": {"k": 2, "temperature": 0.2, "top_p": 0.9, "top_k": 50}',
+        "sampling_eval": 'Example: "sampling_eval": {"k": 1, "temperature": 0.0, "top_p": 1.0, "top_k": 0}',
+        "sampling_train.k": 'Example: "sampling_train": {"k": 2}  (integer, not a string)',
+        "sampling_eval.k": 'Example: "sampling_eval": {"k": 1}  (integer, not a string)',
+        "sampling_train.top_k": 'Example: "sampling_train": {"top_k": 50}  (integer)',
+        "sampling_eval.top_k": 'Example: "sampling_eval": {"top_k": 0}  (integer)',
+        "sampling_train.temperature": 'Example: "sampling_train": {"temperature": 0.2}  (number)',
+        "sampling_eval.temperature": 'Example: "sampling_eval": {"temperature": 0.0}  (number)',
+        "sampling_train.top_p": 'Example: "sampling_train": {"top_p": 0.9}  (number)',
+        "sampling_eval.top_p": 'Example: "sampling_eval": {"top_p": 1.0}  (number)',
+    }
+    return examples.get(field)
 
 
 def _promotion_rationale(
@@ -310,6 +404,16 @@ def _merge_policy_dict(base: dict, proposed: dict) -> dict:
         else:
             merged[key] = value
     return merged
+
+
+def _force_greedy_eval(policy: Policy) -> Policy:
+    payload = policy.to_dict()
+    eval_block = dict(payload.get("sampling_eval", {}))
+    eval_block["temperature"] = 0.0
+    eval_block["top_p"] = 1.0
+    eval_block["top_k"] = 0
+    payload["sampling_eval"] = eval_block
+    return Policy.from_dict(payload)
 
 
 def _clamp(value: float, low: float, high: float) -> float:

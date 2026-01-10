@@ -208,6 +208,13 @@ rslm self-improve --db artifacts/memory.sqlite --backend mock --cycles 3 --train
 
 `rslm self-improve` defaults to Docker verification for safety when `--verify-mode` is not provided.
 
+You can set the log level either before or after the subcommand:
+
+```bash
+rslm --log-level INFO self-improve --db artifacts/memory.sqlite --backend mock --cycles 1
+rslm self-improve --db artifacts/memory.sqlite --backend mock --cycles 1 --log-level DEBUG
+```
+
 ## SQLite migration model
 
 Migrations run once in a parent process (`rslm init-db` or any command that opens the DB with

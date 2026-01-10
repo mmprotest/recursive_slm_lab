@@ -80,6 +80,7 @@ def _build_generate_kwargs(
     temperature: float,
     top_p: float,
     top_k: int,
+    model_config,
 ) -> dict:
     gen_kwargs = {
         "input_ids": input_ids,
@@ -92,6 +93,15 @@ def _build_generate_kwargs(
         gen_kwargs["temperature"] = temperature
         gen_kwargs["top_p"] = top_p
         gen_kwargs["top_k"] = top_k
+    else:
+        from transformers import GenerationConfig
+
+        greedy_config = GenerationConfig.from_model_config(model_config)
+        greedy_config.do_sample = False
+        greedy_config.temperature = 1.0
+        greedy_config.top_p = 1.0
+        greedy_config.top_k = 0
+        gen_kwargs["generation_config"] = greedy_config
     return gen_kwargs
 
 
@@ -149,8 +159,9 @@ class LocalHFBackend(LLMBackend):
                 torch_dtype=dtype,
                 **load_kwargs,
             )
+        self._base_model = model
         if self.adapter_path:
-            model = PeftModel.from_pretrained(model, self.adapter_path)
+            model = PeftModel.from_pretrained(self._base_model, self.adapter_path)
         self._model = model
         self._device = device
         LOGGER.info(
@@ -161,6 +172,20 @@ class LocalHFBackend(LLMBackend):
             device_map,
             self.adapter_path or "none",
         )
+
+    def set_adapter(self, adapter_path: str | None) -> None:
+        if adapter_path == self.adapter_path:
+            return
+        from peft import PeftModel
+
+        if adapter_path is None:
+            self._model = self._base_model
+            self.adapter_path = None
+            LOGGER.info("LocalHF adapter deactivated.")
+            return
+        self._model = PeftModel.from_pretrained(self._base_model, adapter_path)
+        self.adapter_path = adapter_path
+        LOGGER.info("LocalHF adapter activated: %s", adapter_path)
 
     def _resolve_dtype(self, device: str):
         if device == "cpu":
@@ -201,12 +226,14 @@ class LocalHFBackend(LLMBackend):
             temperature,
             top_p,
             top_k,
+            self._model.config,
         )
         LOGGER.info(
             "LocalHF generate: do_sample=%s max_tokens=%s",
             gen_kwargs["do_sample"],
             max_tokens,
         )
+        LOGGER.debug("LocalHF generate kwargs keys: %s", sorted(gen_kwargs.keys()))
         LOGGER.debug(
             "LocalHF sampling params: temperature=%s top_p=%s top_k=%s",
             temperature,

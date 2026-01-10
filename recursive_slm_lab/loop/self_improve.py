@@ -93,11 +93,11 @@ def run_self_improve(
         best_heldout = -1.0
         best_condition = None
 
+        backend_impl = _resolve_backend(config, conn)
         for cycle in range(1, cycles + 1):
             cycle_start = _utc_now()
             LOGGER.info("Cycle %d/%d start", cycle, cycles)
             with log_timing(LOGGER, f"Cycle {cycle}"):
-                backend_impl = _resolve_backend(config, conn)
                 policy_before = _active_policy_name(conn)
                 adapter_before = _active_adapter_name(conn)
                 selected = _select_unseen_tasks(conn, train_pool, train_limit, unseen_only, train_seed + cycle)
@@ -225,6 +225,9 @@ def run_self_improve(
                 adapter_message = adapter_result.message
                 if adapter_result.adapter_path:
                     LOGGER.info("Cycle %d: adapter saved to %s", cycle, adapter_result.adapter_path)
+                if adapter_result.promoted and adapter_result.adapter_path:
+                    if hasattr(backend_impl, "set_adapter"):
+                        backend_impl.set_adapter(adapter_result.adapter_path)
 
             LOGGER.info("Cycle %d: running evaluation (heldout=%d)", cycle, heldout_size)
             with log_timing(LOGGER, f"Cycle {cycle}: evaluation"):

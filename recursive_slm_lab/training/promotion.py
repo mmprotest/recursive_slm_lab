@@ -5,9 +5,10 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from ..eval.robust import evaluate_adapter_pair, paired_bootstrap_ci, split_for_gating
+from ..eval.robust import evaluate_tasks, paired_bootstrap_ci, split_for_gating
 from ..llm.localhf import LocalHFBackend
 from ..memory import get_active_adapter
+from ..policy import DEFAULT_POLICY, Policy
 from .adapters import activate_adapter
 from .sft_lora import train_lora_adapter
 
@@ -39,6 +40,7 @@ class PromotionResult:
     decision: str
     candidate_adapter: str | None
     previous_adapter: str | None
+    adapter_path: str | None
     metrics: dict
     rationale: dict
     message: str
@@ -73,6 +75,7 @@ def train_and_maybe_promote(conn: sqlite3.Connection, cfg: PromotionConfig) -> P
             decision="rejected",
             candidate_adapter=None,
             previous_adapter=previous_adapter_name,
+            adapter_path=None,
             metrics={},
             rationale={"reasons": ["training_failed"]},
             message=training_result.message,
@@ -85,12 +88,13 @@ def train_and_maybe_promote(conn: sqlite3.Connection, cfg: PromotionConfig) -> P
         hidden = hidden[:cfg.regression_size]
 
     baseline_backend = LocalHFBackend(cfg.base_model_path)
-    candidate_backend = LocalHFBackend(cfg.base_model_path, adapter_path=training_result.adapter_path)
+    dummy_policy = _dummy_policy(cfg.k, cfg.temperature, cfg.top_p, cfg.top_k)
 
-    baseline_heldout, candidate_heldout = evaluate_adapter_pair(
+    baseline_heldout = _evaluate_with_adapter(
         baseline_backend,
-        candidate_backend,
+        None,
         heldout,
+        dummy_policy,
         cfg.k,
         cfg.max_tokens,
         cfg.temperature,
@@ -101,10 +105,41 @@ def train_and_maybe_promote(conn: sqlite3.Connection, cfg: PromotionConfig) -> P
         cfg.repeats,
         conn,
     )
-    baseline_hidden, candidate_hidden = evaluate_adapter_pair(
+    candidate_heldout = _evaluate_with_adapter(
         baseline_backend,
-        candidate_backend,
+        training_result.adapter_path,
+        heldout,
+        dummy_policy,
+        cfg.k,
+        cfg.max_tokens,
+        cfg.temperature,
+        cfg.top_p,
+        cfg.top_k,
+        cfg.deterministic,
+        cfg.seed,
+        cfg.repeats,
+        conn,
+    )
+    baseline_hidden = _evaluate_with_adapter(
+        baseline_backend,
+        None,
         hidden,
+        dummy_policy,
+        cfg.k,
+        cfg.max_tokens,
+        cfg.temperature,
+        cfg.top_p,
+        cfg.top_k,
+        cfg.deterministic,
+        cfg.seed,
+        cfg.repeats,
+        conn,
+    )
+    candidate_hidden = _evaluate_with_adapter(
+        baseline_backend,
+        training_result.adapter_path,
+        hidden,
+        dummy_policy,
         cfg.k,
         cfg.max_tokens,
         cfg.temperature,
@@ -202,6 +237,7 @@ def train_and_maybe_promote(conn: sqlite3.Connection, cfg: PromotionConfig) -> P
         decision=decision,
         candidate_adapter=training_result.adapter_name,
         previous_adapter=previous_adapter_name,
+        adapter_path=training_result.adapter_path if promoted else None,
         metrics=metrics,
         rationale=rationale,
         message=message,
@@ -231,3 +267,54 @@ def _promotion_rationale(
         "max_regression_drop": max_regression_drop,
         "noise_band": noise_band,
     }
+
+
+def _dummy_policy(k: int, temperature: float, top_p: float, top_k: int) -> Policy:
+    payload = DEFAULT_POLICY.to_dict()
+    payload["retrieval_top_n"] = 0
+    payload["sampling_train"] = {"k": k, "temperature": temperature, "top_p": top_p, "top_k": top_k}
+    payload["sampling_eval"] = {"k": k, "temperature": temperature, "top_p": top_p, "top_k": top_k}
+    return Policy.from_dict(payload)
+
+
+def _evaluate_with_adapter(
+    backend,
+    adapter_path: str | None,
+    tasks: list,
+    policy: Policy,
+    k: int,
+    max_tokens: int,
+    temperature: float,
+    top_p: float,
+    top_k: int,
+    deterministic: bool,
+    seed: int,
+    repeats: int,
+    conn,
+):
+    if adapter_path is None:
+        if hasattr(backend, "set_adapter"):
+            backend.set_adapter(None)
+    else:
+        if hasattr(backend, "set_adapter"):
+            backend.set_adapter(adapter_path)
+        elif hasattr(backend, "clone_with_adapter"):
+            backend = backend.clone_with_adapter(adapter_path)
+        else:
+            raise ValueError("Backend does not support adapter switching")
+    return evaluate_tasks(
+        backend,
+        tasks,
+        policy,
+        memory_enabled=False,
+        semantic_enabled=False,
+        k=k,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        top_p=top_p,
+        top_k=top_k,
+        deterministic=deterministic,
+        seed=seed,
+        repeats=repeats,
+        conn=conn,
+    )

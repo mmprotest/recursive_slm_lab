@@ -44,6 +44,8 @@ def test_localhf_dependency_guard(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_localhf_generate_kwargs_no_sampling_when_temperature_zero() -> None:
+    transformers = pytest.importorskip("transformers")
+    config = transformers.PretrainedConfig()
     gen_kwargs = localhf._build_generate_kwargs(
         input_ids=[1, 2, 3],
         attention_mask=[1, 1, 1],
@@ -51,8 +53,32 @@ def test_localhf_generate_kwargs_no_sampling_when_temperature_zero() -> None:
         temperature=0.0,
         top_p=0.9,
         top_k=50,
+        model_config=config,
     )
     assert gen_kwargs["do_sample"] is False
     assert "temperature" not in gen_kwargs
     assert "top_p" not in gen_kwargs
     assert "top_k" not in gen_kwargs
+    assert "generation_config" in gen_kwargs
+    assert gen_kwargs["generation_config"].do_sample is False
+    assert gen_kwargs["generation_config"].temperature == 1.0
+    assert gen_kwargs["generation_config"].top_p == 1.0
+    assert gen_kwargs["generation_config"].top_k == 0
+
+
+def test_localhf_generate_kwargs_sampling_when_temperature_positive() -> None:
+    config = pytest.importorskip("transformers").PretrainedConfig()
+    gen_kwargs = localhf._build_generate_kwargs(
+        input_ids=[1, 2, 3],
+        attention_mask=[1, 1, 1],
+        max_tokens=64,
+        temperature=0.3,
+        top_p=0.9,
+        top_k=50,
+        model_config=config,
+    )
+    assert gen_kwargs["do_sample"] is True
+    assert "generation_config" not in gen_kwargs
+    assert gen_kwargs["temperature"] == 0.3
+    assert gen_kwargs["top_p"] == 0.9
+    assert gen_kwargs["top_k"] == 50
